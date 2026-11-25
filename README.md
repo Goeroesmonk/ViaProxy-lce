@@ -61,6 +61,9 @@ ViaLegacy / ViaVersion translate those to your client's version.
   supported** yet. Servers that require them will not work.
 - Skins, capes and other LCE-only features are not shown.
 - Entities with ids above 2047 are not expected (LCE packs them into 11 bits).
+- broken:
+  - minecarts
+  - doors (buggy not broken)
 
 ## Build
 
