@@ -1,0 +1,63 @@
+plugins {
+    id "java"
+}
+
+base {
+    group = project.maven_group
+    version = project.maven_version
+    archivesName = rootProject.name
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = "UTF-8"
+    options.release = project.java_version as int
+}
+
+repositories {
+    mavenCentral()
+    maven { url = "https://repo.viaversion.com" }
+    maven { url = "https://maven.lenni0451.net/everything" }
+    maven { url = "https://libraries.minecraft.net" }
+    maven { url = "https://repo.opencollab.dev/maven-snapshots" }
+    maven { url = "https://repo.opencollab.dev/maven-releases" }
+    maven { url = "https://jitpack.io" }
+}
+
+// ViaProxy is provided at runtime. We compile against the official release jar
+// (it bundles ViaVersion, Netty, Gson, LambdaEvents, ...).
+def viaProxyJar = layout.buildDirectory.file("viaproxy/ViaProxy-${project.viaproxy_version}.jar")
+
+tasks.register("downloadViaProxy") {
+    def out = viaProxyJar
+    def ver = project.viaproxy_version
+    outputs.file(out)
+    doLast {
+        def f = out.get().asFile
+        if (!f.exists()) {
+            f.parentFile.mkdirs()
+            new URL("https://github.com/ViaVersion/ViaProxy/releases/download/v${ver}/ViaProxy-${ver}.jar").withInputStream { i -> f.withOutputStream { it << i } }
+        }
+    }
+}
+
+dependencies {
+    compileOnly files(viaProxyJar) { builtBy "downloadViaProxy" }
+}
+
+processResources {
+    def v = project.version
+    inputs.property("version", v)
+    filesMatching("viaproxy.yml") {
+        expand("version": v)
+    }
+}
+
+jar {
+    from("LICENSE") {
+        rename { "LICENSE_${rootProject.name}" }
+    }
+}

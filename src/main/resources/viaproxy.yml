@@ -1,0 +1,5 @@
+name: "LCERevelations"
+version: "${version}"
+author: "T9homas"
+main: "io.github.t9homas.lceviaproxy.LcePlugin"
+min-version: "3.4.0"

@@ -1,0 +1,870 @@
+package io.github.t9homas.lceviaproxy.net;
+
+import io.github.t9homas.lceviaproxy.data.LceSounds;
+import io.github.t9homas.lceviaproxy.data.LceText;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.function.Consumer;
+
+/**
+ * Translates one LCE server packet into zero or more Java 1.6.4 server packets.
+ * <p>
+ * All reads of a packet happen before any state is changed, so a packet that is not complete yet
+ * (IndexOutOfBoundsException) can be retried later without side effects.
+ */
+public final class LceToJava {
+
+    private static final String[] ATTRIBUTES = {
+            "generic.maxHealth", "generic.followRange", "generic.knockbackResistance", "generic.movementSpeed",
+            "generic.attackDamage", "horse.jumpStrength", "zombie.spawnReinforcements"
+    };
+
+    private static final String[] CONTAINER_TITLES = {
+            "container.chest", "container.crafting", "container.furnace", "container.dispenser", "container.enchant",
+            "container.brewing", "entity.Villager.name", "container.beacon", "container.repair", "container.hopper",
+            "container.dropper", "", "container.crafting", "container.chest", "container.chestDouble", "container.enderchest",
+            "container.minecart", "container.hopper"
+    };
+
+    private final ByteBufAllocator alloc;
+    private final boolean debug;
+    private final Map<Integer, byte[]> rotations = new HashMap<>();
+    private final java.util.Set<Integer> bats = new java.util.HashSet<>();
+
+    private static final int BAT = 65;
+
+    int playerEntityId = -1;
+    int dimension = 0;
+
+    public LceToJava(final ByteBufAllocator alloc, final boolean debug) {
+        this.alloc = alloc;
+        this.debug = debug;
+    }
+
+    private static int levelIdxToDimension(final int idx) {
+        return idx == 1 ? -1 : (idx == 2 ? 1 : 0);
+    }
+
+    private boolean sameLevel(final int levelIdx) {
+        return levelIdxToDimension(levelIdx) == this.dimension;
+    }
+
+    private ByteBuf pkt(final int id) {
+        final ByteBuf b = this.alloc.buffer();
+        b.writeByte(id);
+        return b;
+    }
+
+    /**
+     * Pre-built Java Login (0x01) from the LCE Login response.
+     */
+    public ByteBuf javaLogin(final int entityId, final String levelType, final int gameMode, final int dimension, final int difficulty, final int maxPlayers) {
+        this.playerEntityId = entityId;
+        this.dimension = dimension;
+        final ByteBuf b = pkt(0x01);
+        b.writeInt(entityId);
+        Types.writeString(b, levelType.isEmpty() ? "default" : levelType);
+        b.writeByte(gameMode);
+        b.writeByte(dimension);
+        b.writeByte(difficulty);
+        b.writeByte(0);
+        b.writeByte(Math.min(maxPlayers & 0xFF, 127));
+        return b;
+    }
+
+    public static ByteBuf kick(final ByteBufAllocator alloc, final String reason) {
+        final ByteBuf b = alloc.buffer();
+        b.writeByte(0xFF);
+        Types.writeString(b, reason);
+        return b;
+    }
+
+    public ByteBuf chat(final String text) {
+        // 1.6.4 chat is a JSON object; § formatting inside "text" is converted by ViaLegacy
+        final com.google.gson.JsonObject o = new com.google.gson.JsonObject();
+        o.addProperty("text", text);
+        final ByteBuf b = pkt(0x03);
+        Types.writeString(b, o.toString());
+        return b;
+    }
+
+    /**
+     * @return false if the packet id is unknown (stream can't continue)
+     */
+    public boolean translate(final int id, final ByteBuf in, final Consumer<ByteBuf> out) throws Exception {
+        final List<ByteBuf> list = new ArrayList<>(2);
+        try {
+            if (!this.translate0(id, in, list)) {
+                for (ByteBuf b : list) b.release();
+                return false;
+            }
+        } catch (Exception | Error e) {
+            for (ByteBuf b : list) b.release();
+            throw e;
+        }
+        for (ByteBuf b : list) out.accept(b);
+        return true;
+    }
+
+    private boolean translate0(final int id, final ByteBuf in, final List<ByteBuf> out) throws Exception {
+        switch (id) {
+            case 0x00 -> { // keep alive
+                final ByteBuf b = pkt(0x00);
+                b.writeInt(in.readInt());
+                out.add(b);
+            }
+            case 0x01, 0x02 -> { // login / pre-login after the handshake: ignore
+                if (id == 0x01) skipLogin(in);
+                else skipPreLogin(in);
+            }
+            case 0x03 -> { // chat
+                final int type = in.readShort();
+                final int counts = in.readShort();
+                final List<String> strings = new ArrayList<>();
+                final List<Integer> ints = new ArrayList<>();
+                for (int i = 0; i < ((counts >> 4) & 0xF); i++) strings.add(Types.readString(in));
+                for (int i = 0; i < (counts & 0xF); i++) ints.add(in.readInt());
+                final String text = LceText.chat(type, strings, ints);
+                if (text != null && !text.isEmpty()) out.add(chat(text));
+            }
+            case 0x04 -> copy(in, out, id, "ll");
+            case 0x05 -> { // equipment
+                final ByteBuf b = pkt(0x05);
+                b.writeInt(in.readInt());
+                b.writeShort(in.readShort());
+                Types.itemLceToJava(in, b);
+                out.add(b);
+            }
+            case 0x06 -> copy(in, out, id, "iii");
+            case 0x07 -> copy(in, out, id, "iib");
+            case 0x08 -> { // health (+ LCE damage source byte)
+                final ByteBuf b = pkt(0x08);
+                b.writeFloat(in.readFloat());
+                b.writeShort(in.readShort());
+                b.writeFloat(in.readFloat());
+                in.readByte();
+                out.add(b);
+            }
+            case 0x09 -> { // respawn
+                final int dim = in.readByte();
+                final int gm = in.readByte();
+                final int height = in.readShort();
+                final String lt = Types.readString(in);
+                in.readLong(); // seed
+                final int diff = in.readByte();
+                in.readBoolean(); // new sea level
+                final int newEid = in.readShort();
+                in.readShort(); // xz size
+                in.readUnsignedByte(); // hell scale
+                this.dimension = dim;
+                this.rotations.clear();
+                this.bats.clear();
+                if (newEid != -1 && newEid != 0 && this.debug) {
+                    debugLog("Respawn with new entity id " + newEid + " (kept " + this.playerEntityId + ")");
+                }
+                final ByteBuf b = pkt(0x09);
+                b.writeInt(dim);
+                b.writeByte(diff);
+                b.writeByte(gm);
+                b.writeShort(height <= 0 ? 256 : height);
+                Types.writeString(b, lt.isEmpty() ? "default" : lt);
+                out.add(b);
+            }
+            case 0x0A -> copy(in, out, id, "b");
+            case 0x0B -> copy(in, out, id, "ddddb");
+            case 0x0C -> copy(in, out, id, "ffb");
+            case 0x0D -> copy(in, out, id, "ddddffb");
+            case 0x10 -> copy(in, out, id, "s");
+            case 0x11 -> copy(in, out, id, "ibibi");
+            case 0x12 -> copy(in, out, id, "ib");
+            case 0x14 -> { // named entity spawn
+                final int eid = in.readInt();
+                final String name = Types.readString(in);
+                final int x = in.readInt(), y = in.readInt(), z = in.readInt();
+                final byte yaw = in.readByte(), pitch = in.readByte(), head = in.readByte();
+                final short item = in.readShort();
+                in.skipBytes(8 + 8 + 1 + 4 + 4 + 4); // xuids, player index, skin, cape, privileges
+                final ByteBuf meta = this.alloc.buffer();
+                try {
+                    Types.metadataLceToJava(in, meta);
+                } catch (Exception | Error e) {
+                    meta.release();
+                    throw e;
+                }
+                if (eid == this.playerEntityId) {
+                    meta.release();
+                    break; // the Java client never gets a spawn packet for itself
+                }
+                this.rotations.put(eid, new byte[]{yaw, pitch});
+                final ByteBuf b = pkt(0x14);
+                b.writeInt(eid);
+                Types.writeString(b, name.length() > 16 ? name.substring(0, 16) : name);
+                b.writeInt(x);
+                b.writeInt(y);
+                b.writeInt(z);
+                b.writeByte(yaw);
+                b.writeByte(pitch);
+                b.writeShort(item);
+                b.writeBytes(meta);
+                meta.release();
+                out.add(b);
+                final ByteBuf h = pkt(0x23);
+                h.writeInt(eid);
+                h.writeByte(head);
+                out.add(h);
+            }
+            case 0x16 -> copy(in, out, id, "ii");
+            case 0x17 -> { // object / vehicle spawn
+                final int eid = in.readShort() & 0xFFFF;
+                final byte type = in.readByte();
+                final int x = in.readInt(), y = in.readInt(), z = in.readInt();
+                final byte yaw = in.readByte(), pitch = in.readByte();
+                final int data = in.readInt();
+                short vx = 0, vy = 0, vz = 0;
+                if (data > -1) {
+                    vx = in.readShort();
+                    vy = in.readShort();
+                    vz = in.readShort();
+                }
+                this.rotations.put(eid, new byte[]{yaw, pitch});
+                final ByteBuf b = pkt(0x17);
+                b.writeInt(eid);
+                b.writeByte(type);
+                b.writeInt(x);
+                b.writeInt(y);
+                b.writeInt(z);
+                b.writeByte(pitch);
+                b.writeByte(yaw);
+                b.writeInt(data);
+                if (data > 0) {
+                    b.writeShort(vx);
+                    b.writeShort(vy);
+                    b.writeShort(vz);
+                }
+                out.add(b);
+            }
+            case 0x18 -> { // mob spawn
+                final int eid = in.readShort() & 0xFFFF;
+                final int type = in.readUnsignedByte();
+                final int x = in.readInt(), y = in.readInt(), z = in.readInt();
+                final byte yaw = in.readByte(), pitch = in.readByte(), head = in.readByte();
+                final short vx = in.readShort(), vy = in.readShort(), vz = in.readShort();
+                final ByteBuf meta = this.alloc.buffer();
+                try {
+                    Types.metadataLceToJava(in, meta, type == BAT);
+                } catch (Exception | Error e) {
+                    meta.release();
+                    throw e;
+                }
+                this.rotations.put(eid, new byte[]{yaw, pitch});
+                if (type == BAT) this.bats.add(eid);
+                else this.bats.remove(eid);
+                final ByteBuf b = pkt(0x18);
+                b.writeInt(eid);
+                b.writeByte(type);
+                b.writeInt(x);
+                b.writeInt(y);
+                b.writeInt(z);
+                b.writeByte(yaw);
+                b.writeByte(pitch);
+                b.writeByte(head);
+                b.writeShort(vx);
+                b.writeShort(vy);
+                b.writeShort(vz);
+                b.writeBytes(meta);
+                meta.release();
+                out.add(b);
+            }
+            case 0x19 -> copy(in, out, id, "iSiiii");
+            case 0x1A -> copy(in, out, id, "iiiis");
+            case 0x1B -> copy(in, out, id, "ffbb");
+            case 0x1C -> { // velocity
+                final int idAndFlag = in.readShort();
+                final int eid = idAndFlag & 0x7FF;
+                final int vx, vy, vz;
+                if ((idAndFlag & 0x800) != 0) {
+                    vx = in.readByte() * 16;
+                    vy = in.readByte() * 16;
+                    vz = in.readByte() * 16;
+                } else {
+                    vx = in.readShort();
+                    vy = in.readShort();
+                    vz = in.readShort();
+                }
+                final ByteBuf b = pkt(0x1C);
+                b.writeInt(eid);
+                b.writeShort(vx);
+                b.writeShort(vy);
+                b.writeShort(vz);
+                out.add(b);
+            }
+            case 0x1D -> { // destroy
+                final int count = in.readByte();
+                final int[] ids = new int[Math.max(count, 0)];
+                for (int i = 0; i < ids.length; i++) ids[i] = in.readInt();
+                final ByteBuf b = pkt(0x1D);
+                b.writeByte(ids.length);
+                for (int e : ids) {
+                    b.writeInt(e);
+                    this.rotations.remove(e);
+                    this.bats.remove(e);
+                }
+                out.add(b);
+            }
+            case 0x1E -> entityOnly(in.readShort() & 0xFFFF, out);
+            case 0x1F -> relMove(in.readShort() & 0xFFFF, in.readByte(), in.readByte(), in.readByte(), out);
+            case 0x20 -> {
+                final int eid = in.readShort() & 0xFFFF;
+                final byte dy = in.readByte(), dp = in.readByte();
+                look(eid, dy, dp, out);
+            }
+            case 0x21 -> {
+                final int eid = in.readShort() & 0xFFFF;
+                final byte dx = in.readByte(), dyy = in.readByte(), dz = in.readByte(), dy = in.readByte(), dp = in.readByte();
+                lookMove(eid, dx, dyy, dz, dy, dp, out);
+            }
+            case 0x22 -> { // teleport
+                final int eid = in.readShort() & 0xFFFF;
+                final int x = in.readInt(), y = in.readInt(), z = in.readInt();
+                final byte yaw = in.readByte(), pitch = in.readByte();
+                this.rotations.put(eid, new byte[]{yaw, pitch});
+                final ByteBuf b = pkt(0x22);
+                b.writeInt(eid);
+                b.writeInt(x);
+                b.writeInt(y);
+                b.writeInt(z);
+                b.writeByte(yaw);
+                b.writeByte(pitch);
+                out.add(b);
+            }
+            case 0x23 -> copy(in, out, id, "ib");
+            case 0x26 -> copy(in, out, id, "ib");
+            case 0x27 -> copy(in, out, id, "iib");
+            case 0x28 -> { // metadata
+                final ByteBuf b = pkt(0x28);
+                try {
+                    final int eid = in.readInt();
+                    b.writeInt(eid);
+                    Types.metadataLceToJava(in, b, this.bats.contains(eid));
+                } catch (Exception | Error e) {
+                    b.release();
+                    throw e;
+                }
+                out.add(b);
+            }
+            case 0x29 -> copy(in, out, id, "ibbs");
+            case 0x2A -> copy(in, out, id, "ib");
+            case 0x2B -> copy(in, out, id, "fss");
+            case 0x2C -> { // attributes: LCE uses ids instead of names and modifier ids instead of UUIDs
+                final int eid = in.readInt();
+                final int count = in.readInt();
+                final ByteBuf body = this.alloc.buffer();
+                int written = 0;
+                try {
+                    for (int i = 0; i < count; i++) {
+                        final int attr = in.readShort();
+                        final double base = in.readDouble();
+                        final int mods = in.readShort();
+                        final ByteBuf modBuf = this.alloc.buffer();
+                        for (int j = 0; j < mods; j++) {
+                            final int modId = in.readInt();
+                            final double amount = in.readDouble();
+                            final byte op = in.readByte();
+                            final UUID uuid = UUID.nameUUIDFromBytes(("LCEModifier" + modId).getBytes());
+                            modBuf.writeLong(uuid.getMostSignificantBits());
+                            modBuf.writeLong(uuid.getLeastSignificantBits());
+                            modBuf.writeDouble(amount);
+                            modBuf.writeByte(op);
+                        }
+                        if (attr >= 0 && attr < ATTRIBUTES.length) {
+                            Types.writeString(body, ATTRIBUTES[attr]);
+                            body.writeDouble(base);
+                            body.writeShort(mods);
+                            body.writeBytes(modBuf);
+                            written++;
+                        }
+                        modBuf.release();
+                    }
+                } catch (Exception | Error e) {
+                    body.release();
+                    throw e;
+                }
+                if (written > 0) {
+                    final ByteBuf b = pkt(0x2C);
+                    b.writeInt(eid);
+                    b.writeInt(written);
+                    b.writeBytes(body);
+                    out.add(b);
+                }
+                body.release();
+            }
+            case 0x32 -> { // chunk visibility
+                final int cx = in.readInt(), cz = in.readInt();
+                final boolean visible = in.readUnsignedByte() != 0;
+                if (!visible) out.add(ChunkConverter.unloadChunk(this.alloc, cx, cz));
+            }
+            case 0x33 -> blockRegion(in, out);
+            case 0x34 -> { // chunk tiles update
+                final int xc = in.readShort();
+                final int zc = in.readShort();
+                final int countAndFlags = in.readUnsignedByte();
+                final boolean dataAllZero = (countAndFlags & 0x80) != 0;
+                final int levelIdx = (countAndFlags >> 5) & 3;
+                final int count = countAndFlags & 0x1F;
+                final int[] records = new int[count];
+                int block = -1;
+                for (int i = 0; i < count; i++) {
+                    final int xzAndFlag = in.readShort() & 0xFFFF;
+                    final int y = in.readUnsignedByte();
+                    if ((xzAndFlag & 0x80) != 0) block = in.readUnsignedByte();
+                    final int data = dataAllZero ? 0 : in.readUnsignedByte();
+                    final int x = (xzAndFlag >> 12) & 15, z = (xzAndFlag >> 8) & 15;
+                    records[i] = (x << 28) | (z << 24) | (y << 16) | ((block & 0xFFF) << 4) | (data & 0xF);
+                }
+                if (count > 0 && sameLevel(levelIdx)) {
+                    final ByteBuf b = pkt(0x34);
+                    b.writeInt(xc);
+                    b.writeInt(zc);
+                    b.writeShort(count);
+                    b.writeInt(count * 4);
+                    for (int r : records) b.writeInt(r);
+                    out.add(b);
+                }
+            }
+            case 0x35 -> { // block change
+                final int x = in.readInt();
+                final int y = in.readUnsignedByte();
+                final int z = in.readInt();
+                final int block = in.readShort() & 0xFFFF;
+                final int dataLevel = in.readUnsignedByte();
+                if (sameLevel((dataLevel >> 4) & 0xF)) {
+                    final ByteBuf b = pkt(0x35);
+                    b.writeInt(x);
+                    b.writeByte(y);
+                    b.writeInt(z);
+                    b.writeShort(block);
+                    b.writeByte(dataLevel & 0xF);
+                    out.add(b);
+                }
+            }
+            case 0x36 -> copy(in, out, id, "isibbs");
+            case 0x37 -> copy(in, out, id, "iiiib");
+            case 0x3C -> { // explosion (+ LCE knockback only flag)
+                final boolean knockbackOnly = in.readBoolean();
+                double x = 0, y = -1000, z = 0;
+                float r = 0;
+                byte[] records = new byte[0];
+                if (!knockbackOnly) {
+                    x = in.readDouble();
+                    y = in.readDouble();
+                    z = in.readDouble();
+                    r = in.readFloat();
+                    final int count = in.readInt();
+                    records = new byte[count * 3];
+                    in.readBytes(records);
+                }
+                final float kx = in.readFloat(), ky = in.readFloat(), kz = in.readFloat();
+                final ByteBuf b = pkt(0x3C);
+                b.writeDouble(x);
+                b.writeDouble(y);
+                b.writeDouble(z);
+                b.writeFloat(r);
+                b.writeInt(records.length / 3);
+                b.writeBytes(records);
+                b.writeFloat(kx);
+                b.writeFloat(ky);
+                b.writeFloat(kz);
+                out.add(b);
+            }
+            case 0x3D -> copy(in, out, id, "iibiib");
+            case 0x3E -> { // sound: LCE sends an id and a float pitch
+                final int sound = in.readInt();
+                final int x = in.readInt(), y = in.readInt(), z = in.readInt();
+                final float volume = in.readFloat();
+                final float pitch = in.readFloat();
+                final String name = LceSounds.name(sound);
+                if (name != null) {
+                    final ByteBuf b = pkt(0x3E);
+                    Types.writeString(b, name);
+                    b.writeInt(x);
+                    b.writeInt(y);
+                    b.writeInt(z);
+                    b.writeFloat(volume);
+                    b.writeByte(Math.max(0, Math.min(255, (int) (pitch * 63.0F))));
+                    out.add(b);
+                } else if (this.debug) {
+                    debugLog("Unknown sound id " + sound);
+                }
+            }
+            case 0x3F -> copy(in, out, id, "Sfffffffi");
+            case 0x46 -> copy(in, out, id, "bb");
+            case 0x47 -> copy(in, out, id, "ibiii");
+            case 0x64 -> { // open window
+                final int windowId = in.readUnsignedByte();
+                final int type = in.readUnsignedByte();
+                final int size = in.readUnsignedByte();
+                final boolean customName = in.readBoolean();
+                int entityId = 0;
+                if (type == 11) entityId = in.readInt();
+                final String title = customName ? Types.readString(in) : null;
+                int javaType = type;
+                if (type == 12) javaType = 1;
+                else if (type >= 13 && type <= 16) javaType = 0;
+                else if (type == 17) javaType = 9;
+                final ByteBuf b = pkt(0x64);
+                b.writeByte(windowId);
+                b.writeByte(javaType);
+                Types.writeString(b, title != null ? title : (type < CONTAINER_TITLES.length ? CONTAINER_TITLES[type] : ""));
+                b.writeByte(size);
+                b.writeBoolean(title != null);
+                if (javaType == 11) b.writeInt(entityId);
+                out.add(b);
+            }
+            case 0x65 -> copy(in, out, id, "b");
+            case 0x67 -> {
+                final ByteBuf b = pkt(0x67);
+                try {
+                    b.writeByte(in.readByte());
+                    b.writeShort(in.readShort());
+                    Types.itemLceToJava(in, b);
+                } catch (Exception | Error e) {
+                    b.release();
+                    throw e;
+                }
+                out.add(b);
+            }
+            case 0x68 -> {
+                final ByteBuf b = pkt(0x68);
+                try {
+                    b.writeByte(in.readByte());
+                    final int count = in.readShort();
+                    b.writeShort(count);
+                    for (int i = 0; i < count; i++) Types.itemLceToJava(in, b);
+                } catch (Exception | Error e) {
+                    b.release();
+                    throw e;
+                }
+                out.add(b);
+            }
+            case 0x69 -> copy(in, out, id, "bss");
+            case 0x6A -> copy(in, out, id, "bsb");
+            case 0x6B -> {
+                final ByteBuf b = pkt(0x6B);
+                try {
+                    b.writeShort(in.readShort());
+                    Types.itemLceToJava(in, b);
+                } catch (Exception | Error e) {
+                    b.release();
+                    throw e;
+                }
+                out.add(b);
+            }
+            case 0x6C -> copy(in, out, id, "bb");
+            case 0x82 -> { // sign (+ LCE verified / censored flags)
+                final int x = in.readInt();
+                final short y = in.readShort();
+                final int z = in.readInt();
+                in.readBoolean();
+                in.readBoolean();
+                final String[] lines = new String[4];
+                for (int i = 0; i < 4; i++) lines[i] = Types.readString(in);
+                final ByteBuf b = pkt(0x82);
+                b.writeInt(x);
+                b.writeShort(y);
+                b.writeInt(z);
+                for (String l : lines) Types.writeString(b, l.length() > 15 ? l.substring(0, 15) : l);
+                out.add(b);
+            }
+            case 0x83 -> { // map data
+                final short type = in.readShort(), itemId = in.readShort();
+                final int len = in.readUnsignedShort();
+                final byte[] data = new byte[len];
+                in.readBytes(data);
+                final ByteBuf b = pkt(0x83);
+                b.writeShort(type);
+                b.writeShort(itemId);
+                b.writeShort(len);
+                b.writeBytes(data);
+                out.add(b);
+            }
+            case 0x84 -> { // tile entity data
+                final ByteBuf b = pkt(0x84);
+                try {
+                    b.writeInt(in.readInt());
+                    b.writeShort(in.readShort());
+                    b.writeInt(in.readInt());
+                    b.writeByte(in.readByte());
+                    Types.nbtLceToJava(in, b);
+                } catch (Exception | Error e) {
+                    b.release();
+                    throw e;
+                }
+                out.add(b);
+            }
+            case 0x85 -> copy(in, out, id, "biii");
+            case 0xC8 -> { // award stat (LCE: id + param blob) - not shown
+                in.readInt();
+                final int len = in.readInt();
+                if (len > 0) in.skipBytes(len);
+            }
+            case 0xC9 -> in.skipBytes(1 + 2 + 4 + 4); // LCE player info (small id / colour / privileges / entity)
+            case 0xCA -> copy(in, out, id, "bff");
+            case 0xCE -> copy(in, out, id, "SSb");
+            case 0xCF -> {
+                final String owner = Types.readString(in);
+                final byte method = in.readByte();
+                String objective = null;
+                int score = 0;
+                if (method != 1) {
+                    objective = Types.readString(in);
+                    score = in.readInt();
+                }
+                final ByteBuf b = pkt(0xCF);
+                Types.writeString(b, owner);
+                b.writeByte(method);
+                if (objective != null) {
+                    Types.writeString(b, objective);
+                    b.writeInt(score);
+                }
+                out.add(b);
+            }
+            case 0xD0 -> copy(in, out, id, "bS");
+            case 0xD1 -> { // teams
+                final String name = Types.readString(in);
+                final byte method = in.readByte();
+                final ByteBuf b = pkt(0xD1);
+                try {
+                    Types.writeString(b, name);
+                    b.writeByte(method);
+                    if (method == 0 || method == 2) {
+                        Types.writeString(b, Types.readString(in));
+                        Types.writeString(b, Types.readString(in));
+                        Types.writeString(b, Types.readString(in));
+                        b.writeByte(in.readByte());
+                    }
+                    if (method == 0 || method == 3 || method == 4) {
+                        final int count = in.readShort();
+                        b.writeShort(count);
+                        for (int i = 0; i < count; i++) Types.writeString(b, Types.readString(in));
+                    }
+                } catch (Exception | Error e) {
+                    b.release();
+                    throw e;
+                }
+                out.add(b);
+            }
+            case 0xFA -> { // custom payload
+                final String channel = Types.readString(in);
+                final int len = in.readShort();
+                final byte[] data = len > 0 && len < Short.MAX_VALUE ? new byte[len] : new byte[0];
+                in.readBytes(data);
+                if (!channel.startsWith("MC|Fork") && !channel.startsWith("MC|C")) {
+                    final ByteBuf b = pkt(0xFA);
+                    Types.writeString(b, channel);
+                    b.writeShort(data.length);
+                    b.writeBytes(data);
+                    out.add(b);
+                } else if (this.debug) {
+                    debugLog("Dropped server payload " + channel + " (" + data.length + " bytes)");
+                }
+            }
+            case 0xFF -> { // disconnect: LCE sends a reason id
+                out.add(kick(this.alloc, LceText.disconnect(in.readInt())));
+            }
+
+            // ---------------------------------------------------------- LCE only, dropped
+            case 0x96 -> in.skipBytes(2 + 4);   // craft item
+            case 0x97 -> in.skipBytes(4 + 4);   // trade item
+            case 0x98 -> in.skipBytes(4);       // debug options
+            case 0x99 -> in.skipBytes(1 + 4);   // server settings changed
+            case 0x9A -> { // texture
+                Types.skipJavaUtf(in);
+                final int n = in.readShort();
+                if (n > 0) in.skipBytes(n);
+            }
+            case 0x9B -> in.skipBytes(16);      // chunk visibility area
+            case 0x9C -> in.skipBytes(1);       // update progress
+            case 0x9D -> { // texture change
+                in.skipBytes(4 + 1);
+                Types.skipJavaUtf(in);
+            }
+            case 0x9E -> { // game rule progress
+                in.readInt();
+                Types.readString(in);
+                in.skipBytes(4 + 1 + 4);
+                final int n = in.readInt();
+                if (n > 0) in.skipBytes(n);
+            }
+            case 0x9F -> in.skipBytes(1);       // kick player (small id)
+            case 0xA0 -> { // texture and geometry
+                Types.skipJavaUtf(in);
+                in.readInt();
+                final int n = in.readShort();
+                if (n > 0) in.skipBytes(n);
+                in.readInt();
+                final int boxes = in.readShort();
+                if (boxes > 0) in.skipBytes(boxes * (2 + 8 * 4));
+            }
+            case 0xA1 -> { // texture and geometry change
+                in.skipBytes(4 + 4);
+                Types.skipJavaUtf(in);
+            }
+
+            // ---------------------------------------------------------- small entity moves
+            case 0xA2 -> entityOnly(in.readShort() & 0x7FF, out);
+            case 0xA3 -> { // small pos
+                final int idAndY = in.readShort();
+                final int xz = in.readByte();
+                relMove(idAndY & 0x7FF, (byte) (xz >> 4), (byte) (idAndY >> 11), (byte) ((xz << 28) >> 28), out);
+            }
+            case 0xA4 -> { // small rot (yaw delta only)
+                final int idAndRot = in.readShort();
+                look(idAndRot & 0x7FF, (byte) (idAndRot >> 11), (byte) 0, out);
+            }
+            case 0xA5 -> { // small pos + rot
+                final int idAndRot = in.readShort();
+                final int xyz = in.readShort();
+                final byte dx = (byte) (xyz >> 11);
+                final byte dy = (byte) ((xyz << 21) >> 26);
+                final byte dz = (byte) ((xyz << 27) >> 27);
+                lookMove(idAndRot & 0x7FF, dx, dy, dz, (byte) (idAndRot >> 11), (byte) 0, out);
+            }
+            case 0xA6 -> in.skipBytes(1 + 4 + 4); // XZ packet
+            case 0xA7 -> { // game command
+                in.readInt();
+                final int n = in.readShort();
+                if (n > 0 && n < Short.MAX_VALUE) in.skipBytes(n);
+            }
+            default -> {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // ------------------------------------------------------------------ entity movement (LCE rotations are relative)
+
+    private void entityOnly(final int eid, final List<ByteBuf> out) {
+        final ByteBuf b = pkt(0x1E);
+        b.writeInt(eid);
+        out.add(b);
+    }
+
+    private void relMove(final int eid, final byte dx, final byte dy, final byte dz, final List<ByteBuf> out) {
+        final ByteBuf b = pkt(0x1F);
+        b.writeInt(eid);
+        b.writeByte(dx);
+        b.writeByte(dy);
+        b.writeByte(dz);
+        out.add(b);
+    }
+
+    private byte[] rotate(final int eid, final byte dYaw, final byte dPitch) {
+        final byte[] r = this.rotations.computeIfAbsent(eid, k -> new byte[2]);
+        r[0] = (byte) (r[0] + dYaw);
+        r[1] = (byte) (r[1] + dPitch);
+        return r;
+    }
+
+    private void look(final int eid, final byte dYaw, final byte dPitch, final List<ByteBuf> out) {
+        final byte[] r = rotate(eid, dYaw, dPitch);
+        final ByteBuf b = pkt(0x20);
+        b.writeInt(eid);
+        b.writeByte(r[0]);
+        b.writeByte(r[1]);
+        out.add(b);
+    }
+
+    private void lookMove(final int eid, final byte dx, final byte dy, final byte dz, final byte dYaw, final byte dPitch, final List<ByteBuf> out) {
+        final byte[] r = rotate(eid, dYaw, dPitch);
+        final ByteBuf b = pkt(0x21);
+        b.writeInt(eid);
+        b.writeByte(dx);
+        b.writeByte(dy);
+        b.writeByte(dz);
+        b.writeByte(r[0]);
+        b.writeByte(r[1]);
+        out.add(b);
+    }
+
+    // ------------------------------------------------------------------ chunks
+
+    private void blockRegion(final ByteBuf in, final List<ByteBuf> out) throws Exception {
+        final int flags = in.readUnsignedByte();
+        final int x = in.readInt();
+        final int y = in.readShort();
+        final int z = in.readInt();
+        final int xs = in.readUnsignedByte() + 1;
+        int ys = in.readUnsignedByte() + 1;
+        final int zs = in.readUnsignedByte() + 1;
+        final boolean full = (flags & 0x01) != 0;
+        if ((flags & 0x02) != 0) ys = 0;
+        int size = in.readInt();
+        final int levelIdx = (size >> 30) & 3;
+        size &= 0x3FFFFFFF;
+        final byte[] compressed = new byte[size];
+        in.readBytes(compressed);
+
+        if (!sameLevel(levelIdx)) {
+            return;
+        }
+        final byte[] data = size == 0 ? new byte[0] : ChunkConverter.decompress(compressed);
+        if (full) {
+            out.add(ChunkConverter.fullChunk(this.alloc, x >> 4, z >> 4, ys, data, this.dimension == 0));
+        } else {
+            ChunkConverter.partialRegion(this.alloc, x, y, z, xs, ys, zs, data, out::add);
+        }
+    }
+
+    // ------------------------------------------------------------------ passthrough
+
+    /**
+     * Copies a packet whose layout is the same in LCE and 1.6.4.
+     * b=byte s=short i=int l=long f=float d=double S=string
+     */
+    private void copy(final ByteBuf in, final List<ByteBuf> out, final int id, final String spec) {
+        final ByteBuf b = pkt(id);
+        try {
+            for (int i = 0; i < spec.length(); i++) {
+                switch (spec.charAt(i)) {
+                    case 'b' -> b.writeByte(in.readByte());
+                    case 's' -> b.writeShort(in.readShort());
+                    case 'i', 'f' -> b.writeInt(in.readInt());
+                    case 'l', 'd' -> b.writeLong(in.readLong());
+                    case 'S' -> Types.writeString(b, Types.readString(in));
+                    default -> throw new IllegalStateException("bad spec " + spec);
+                }
+            }
+        } catch (Exception | Error e) {
+            b.release();
+            throw e;
+        }
+        out.add(b);
+    }
+
+    static void skipLogin(final ByteBuf in) {
+        in.readInt();
+        Types.readString(in);
+        Types.readString(in);
+        in.skipBytes(8 + 4 + 1 + 1 + 1 + 8 + 8 + 1 + 4 + 1 + 4 + 1 + 4 + 4 + 1 + 1 + 4 + 2 + 1);
+    }
+
+    static void skipPreLogin(final ByteBuf in) {
+        in.readShort();
+        Types.readString(in);
+        in.skipBytes(1 + 4);
+        final int players = in.readUnsignedByte();
+        in.skipBytes(players * 8 + 14 + 4 + 1 + 4);
+    }
+
+    private static void debugLog(final String s) {
+        net.raphimc.viaproxy.util.logging.Logger.LOGGER.info("[LCE] " + s);
+    }
+
+}

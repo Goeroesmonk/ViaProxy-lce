@@ -1,0 +1,8 @@
+# Use LF everywhere (no CRLF conversion warnings on Windows)
+* text=auto eol=lf
+
+# Windows scripts use crlf
+*.bat text eol=crlf
+
+# Binary files
+*.jar binary
