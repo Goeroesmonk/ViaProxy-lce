@@ -9,9 +9,11 @@ import io.netty.buffer.ByteBufAllocator;
 public final class JavaToLce {
 
     private final ByteBufAllocator alloc;
+    private final LceToJava ids;
 
-    public JavaToLce(final ByteBufAllocator alloc) {
+    public JavaToLce(final ByteBufAllocator alloc, final LceToJava ids) {
         this.alloc = alloc;
+        this.ids = ids;
     }
 
     private ByteBuf pkt(final int id) {
@@ -45,12 +47,18 @@ public final class JavaToLce {
             }
             case 0x07 -> { // use entity -> interact
                 final ByteBuf b = pkt(0x07);
-                b.writeInt(in.readInt());
-                b.writeInt(in.readInt());
+                b.writeInt(this.ids.serverEid(in.readInt()));
+                b.writeInt(this.ids.serverEid(in.readInt()));
                 b.writeByte(in.readByte());
                 return b;
             }
-            case 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x10, 0x12, 0x1B, 0x65, 0x6A, 0x6C, 0xCA -> {
+            case 0x12 -> { // animation
+                final ByteBuf b = pkt(0x12);
+                b.writeInt(this.ids.serverEid(in.readInt()));
+                b.writeByte(in.readByte());
+                return b;
+            }
+            case 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x10, 0x1B, 0x65, 0x6A, 0x6C, 0xCA -> {
                 // same layout
                 final ByteBuf b = pkt(id);
                 b.writeBytes(in);
@@ -70,7 +78,7 @@ public final class JavaToLce {
             }
             case 0x13 -> { // entity action
                 final ByteBuf b = pkt(0x13);
-                b.writeInt(in.readInt());
+                b.writeInt(this.ids.serverEid(in.readInt()));
                 int action = in.readByte();
                 if (action == 6) action = 8;      // horse jump -> RIDING_JUMP
                 else if (action == 7) action = 9; // open horse inventory -> OPEN_INVENTORY

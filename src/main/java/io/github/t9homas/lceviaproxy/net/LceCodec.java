@@ -2,6 +2,7 @@ package io.github.t9homas.lceviaproxy.net;
 
 import io.github.t9homas.lceviaproxy.LceConfig;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
@@ -45,7 +46,7 @@ public final class LceCodec extends ChannelDuplexHandler {
         this.net = ctx.alloc().buffer();
         this.stream = ctx.alloc().buffer();
         this.toJava = new LceToJava(ctx.alloc(), this.config.debug());
-        this.toLce = new JavaToLce(ctx.alloc());
+        this.toLce = new JavaToLce(ctx.alloc(), this.toJava);
     }
 
     @Override
@@ -357,6 +358,9 @@ public final class LceCodec extends ChannelDuplexHandler {
             return;
         }
         final ByteBuf lce = this.toLce.translate(id, packet);
+        if (this.config.debug() && id != 0x0A && id != 0x0B && id != 0x0C && id != 0x0D && id != 0x00) {
+            Logger.LOGGER.info("[LCE] client 0x" + Integer.toHexString(id) + (lce == null ? " dropped" : " -> LCE " + ByteBufUtil.hexDump(lce, lce.readerIndex(), Math.min(lce.readableBytes(), 48))));
+        }
         if (lce != null) {
             out.writeInt(lce.readableBytes());
             out.writeBytes(lce);

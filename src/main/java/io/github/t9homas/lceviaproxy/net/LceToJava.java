@@ -39,8 +39,31 @@ public final class LceToJava {
 
     private static final int BAT = 65;
 
+    /** Entity id the Java client has for itself (from Login, never changes). */
     int playerEntityId = -1;
+    /** Entity id the LCE server currently uses for us (changes on respawn). */
+    int serverEntityId = -1;
     int dimension = 0;
+
+    private static final int ALIAS = 0x40000000;
+
+    /**
+     * LCE gives the player a new entity id on respawn, Java can't change its own id. Map server ids to client ids.
+     */
+    int eid(final int serverId) {
+        if (serverId == this.serverEntityId) return this.playerEntityId;
+        if (serverId == this.playerEntityId) return serverId | ALIAS; // another entity got our old id
+        return serverId;
+    }
+
+    /**
+     * Client id -> server id.
+     */
+    int serverEid(final int clientId) {
+        if (clientId == this.playerEntityId) return this.serverEntityId;
+        if ((clientId & ALIAS) != 0) return clientId & ~ALIAS;
+        return clientId;
+    }
 
     public LceToJava(final ByteBufAllocator alloc, final boolean debug) {
         this.alloc = alloc;
@@ -66,6 +89,7 @@ public final class LceToJava {
      */
     public ByteBuf javaLogin(final int entityId, final String levelType, final int gameMode, final int dimension, final int difficulty, final int maxPlayers) {
         this.playerEntityId = entityId;
+        this.serverEntityId = entityId;
         this.dimension = dimension;
         final ByteBuf b = pkt(0x01);
         b.writeInt(entityId);
@@ -136,7 +160,7 @@ public final class LceToJava {
             case 0x04 -> copy(in, out, id, "ll");
             case 0x05 -> { // equipment
                 final ByteBuf b = pkt(0x05);
-                b.writeInt(in.readInt());
+                b.writeInt(eid(in.readInt()));
                 b.writeShort(in.readShort());
                 Types.itemLceToJava(in, b);
                 out.add(b);
@@ -165,8 +189,11 @@ public final class LceToJava {
                 this.dimension = dim;
                 this.rotations.clear();
                 this.bats.clear();
-                if (newEid != -1 && newEid != 0 && this.debug) {
-                    debugLog("Respawn with new entity id " + newEid + " (kept " + this.playerEntityId + ")");
+                if (newEid > 0) {
+                    if (this.debug && newEid != this.serverEntityId) {
+                        debugLog("Respawn: server entity id " + this.serverEntityId + " -> " + newEid + " (client keeps " + this.playerEntityId + ")");
+                    }
+                    this.serverEntityId = newEid & 0xFFFF;
                 }
                 final ByteBuf b = pkt(0x09);
                 b.writeInt(dim);
@@ -181,8 +208,8 @@ public final class LceToJava {
             case 0x0C -> copy(in, out, id, "ffb");
             case 0x0D -> copy(in, out, id, "ddddffb");
             case 0x10 -> copy(in, out, id, "s");
-            case 0x11 -> copy(in, out, id, "ibibi");
-            case 0x12 -> copy(in, out, id, "ib");
+            case 0x11 -> copy(in, out, id, "ebibi");
+            case 0x12 -> copy(in, out, id, "eb");
             case 0x14 -> { // named entity spawn
                 final int eid = in.readInt();
                 final String name = Types.readString(in);
@@ -197,13 +224,13 @@ public final class LceToJava {
                     meta.release();
                     throw e;
                 }
-                if (eid == this.playerEntityId) {
+                if (eid == this.serverEntityId) {
                     meta.release();
                     break; // the Java client never gets a spawn packet for itself
                 }
                 this.rotations.put(eid, new byte[]{yaw, pitch});
                 final ByteBuf b = pkt(0x14);
-                b.writeInt(eid);
+                b.writeInt(eid(eid));
                 Types.writeString(b, name.length() > 16 ? name.substring(0, 16) : name);
                 b.writeInt(x);
                 b.writeInt(y);
@@ -215,11 +242,11 @@ public final class LceToJava {
                 meta.release();
                 out.add(b);
                 final ByteBuf h = pkt(0x23);
-                h.writeInt(eid);
+                h.writeInt(eid(eid));
                 h.writeByte(head);
                 out.add(h);
             }
-            case 0x16 -> copy(in, out, id, "ii");
+            case 0x16 -> copy(in, out, id, "ee");
             case 0x17 -> { // object / vehicle spawn
                 final int eid = in.readShort() & 0xFFFF;
                 final byte type = in.readByte();
@@ -234,7 +261,7 @@ public final class LceToJava {
                 }
                 this.rotations.put(eid, new byte[]{yaw, pitch});
                 final ByteBuf b = pkt(0x17);
-                b.writeInt(eid);
+                b.writeInt(eid(eid));
                 b.writeByte(type);
                 b.writeInt(x);
                 b.writeInt(y);
@@ -266,7 +293,7 @@ public final class LceToJava {
                 if (type == BAT) this.bats.add(eid);
                 else this.bats.remove(eid);
                 final ByteBuf b = pkt(0x18);
-                b.writeInt(eid);
+                b.writeInt(eid(eid));
                 b.writeByte(type);
                 b.writeInt(x);
                 b.writeInt(y);
@@ -281,8 +308,8 @@ public final class LceToJava {
                 meta.release();
                 out.add(b);
             }
-            case 0x19 -> copy(in, out, id, "iSiiii");
-            case 0x1A -> copy(in, out, id, "iiiis");
+            case 0x19 -> copy(in, out, id, "eSiiii");
+            case 0x1A -> copy(in, out, id, "eiiis");
             case 0x1B -> copy(in, out, id, "ffbb");
             case 0x1C -> { // velocity
                 final int idAndFlag = in.readShort();
@@ -298,7 +325,7 @@ public final class LceToJava {
                     vz = in.readShort();
                 }
                 final ByteBuf b = pkt(0x1C);
-                b.writeInt(eid);
+                b.writeInt(eid(eid));
                 b.writeShort(vx);
                 b.writeShort(vy);
                 b.writeShort(vz);
@@ -311,7 +338,7 @@ public final class LceToJava {
                 final ByteBuf b = pkt(0x1D);
                 b.writeByte(ids.length);
                 for (int e : ids) {
-                    b.writeInt(e);
+                    b.writeInt(eid(e));
                     this.rotations.remove(e);
                     this.bats.remove(e);
                 }
@@ -335,7 +362,7 @@ public final class LceToJava {
                 final byte yaw = in.readByte(), pitch = in.readByte();
                 this.rotations.put(eid, new byte[]{yaw, pitch});
                 final ByteBuf b = pkt(0x22);
-                b.writeInt(eid);
+                b.writeInt(eid(eid));
                 b.writeInt(x);
                 b.writeInt(y);
                 b.writeInt(z);
@@ -343,14 +370,14 @@ public final class LceToJava {
                 b.writeByte(pitch);
                 out.add(b);
             }
-            case 0x23 -> copy(in, out, id, "ib");
-            case 0x26 -> copy(in, out, id, "ib");
-            case 0x27 -> copy(in, out, id, "iib");
+            case 0x23 -> copy(in, out, id, "eb");
+            case 0x26 -> copy(in, out, id, "eb");
+            case 0x27 -> copy(in, out, id, "eeb");
             case 0x28 -> { // metadata
                 final ByteBuf b = pkt(0x28);
                 try {
                     final int eid = in.readInt();
-                    b.writeInt(eid);
+                    b.writeInt(eid(eid));
                     Types.metadataLceToJava(in, b, this.bats.contains(eid));
                 } catch (Exception | Error e) {
                     b.release();
@@ -358,8 +385,8 @@ public final class LceToJava {
                 }
                 out.add(b);
             }
-            case 0x29 -> copy(in, out, id, "ibbs");
-            case 0x2A -> copy(in, out, id, "ib");
+            case 0x29 -> copy(in, out, id, "ebbs");
+            case 0x2A -> copy(in, out, id, "eb");
             case 0x2B -> copy(in, out, id, "fss");
             case 0x2C -> { // attributes: LCE uses ids instead of names and modifier ids instead of UUIDs
                 final int eid = in.readInt();
@@ -397,7 +424,7 @@ public final class LceToJava {
                 }
                 if (written > 0) {
                     final ByteBuf b = pkt(0x2C);
-                    b.writeInt(eid);
+                    b.writeInt(eid(eid));
                     b.writeInt(written);
                     b.writeBytes(body);
                     out.add(b);
@@ -454,7 +481,7 @@ public final class LceToJava {
                 }
             }
             case 0x36 -> copy(in, out, id, "isibbs");
-            case 0x37 -> copy(in, out, id, "iiiib");
+            case 0x37 -> copy(in, out, id, "eiiib");
             case 0x3C -> { // explosion (+ LCE knockback only flag)
                 final boolean knockbackOnly = in.readBoolean();
                 double x = 0, y = -1000, z = 0;
@@ -752,13 +779,13 @@ public final class LceToJava {
 
     private void entityOnly(final int eid, final List<ByteBuf> out) {
         final ByteBuf b = pkt(0x1E);
-        b.writeInt(eid);
+        b.writeInt(eid(eid));
         out.add(b);
     }
 
     private void relMove(final int eid, final byte dx, final byte dy, final byte dz, final List<ByteBuf> out) {
         final ByteBuf b = pkt(0x1F);
-        b.writeInt(eid);
+        b.writeInt(eid(eid));
         b.writeByte(dx);
         b.writeByte(dy);
         b.writeByte(dz);
@@ -775,7 +802,7 @@ public final class LceToJava {
     private void look(final int eid, final byte dYaw, final byte dPitch, final List<ByteBuf> out) {
         final byte[] r = rotate(eid, dYaw, dPitch);
         final ByteBuf b = pkt(0x20);
-        b.writeInt(eid);
+        b.writeInt(eid(eid));
         b.writeByte(r[0]);
         b.writeByte(r[1]);
         out.add(b);
@@ -784,7 +811,7 @@ public final class LceToJava {
     private void lookMove(final int eid, final byte dx, final byte dy, final byte dz, final byte dYaw, final byte dPitch, final List<ByteBuf> out) {
         final byte[] r = rotate(eid, dYaw, dPitch);
         final ByteBuf b = pkt(0x21);
-        b.writeInt(eid);
+        b.writeInt(eid(eid));
         b.writeByte(dx);
         b.writeByte(dy);
         b.writeByte(dz);
@@ -836,6 +863,7 @@ public final class LceToJava {
                     case 'b' -> b.writeByte(in.readByte());
                     case 's' -> b.writeShort(in.readShort());
                     case 'i', 'f' -> b.writeInt(in.readInt());
+                    case 'e' -> b.writeInt(eid(in.readInt()));
                     case 'l', 'd' -> b.writeLong(in.readLong());
                     case 'S' -> Types.writeString(b, Types.readString(in));
                     default -> throw new IllegalStateException("bad spec " + spec);
