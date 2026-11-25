@@ -8,6 +8,8 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import net.raphimc.viaproxy.util.logging.Logger;
 
+import java.util.concurrent.TimeUnit;
+
 /**
  * Sits between the socket and ViaProxy's "sizer" (in place of ViaLegacy's pre-netty splitter).
  * <p>
@@ -283,15 +285,42 @@ public final class LceCodec extends ChannelDuplexHandler {
             }
             // Via reads the packet id as a VarInt, pre-netty ids are one unsigned byte
             final int id = packet.readUnsignedByte();
+            final boolean doorTop = id == 0x35 && isDoorTop(packet);
             final int idLen = id >= 0x80 ? 2 : 1;
             final ByteBuf framed = ctx.alloc().buffer(packet.readableBytes() + idLen + 5);
             Types.writeVarInt(framed, packet.readableBytes() + idLen);
             Types.writeVarInt(framed, id);
             framed.writeBytes(packet);
+            if (doorTop) {
+                // LCE answers a click on a door's top half with that (unchanged) top half first and sends the changed
+                // bottom half a tick later. Java clients draw the door from the bottom half, so the door flicked back.
+                // Hand the top half over after the bottom half.
+                ctx.executor().schedule(() -> {
+                    if (ctx.channel().isActive() && this.state == State.PLAY) {
+                        ctx.fireChannelRead(framed);
+                    } else {
+                        framed.release();
+                    }
+                }, DOOR_TOP_DELAY_MS, TimeUnit.MILLISECONDS);
+                return;
+            }
             ctx.fireChannelRead(framed);
         } finally {
             packet.release();
         }
+    }
+
+    private static final long DOOR_TOP_DELAY_MS = 120;
+
+    /**
+     * 1.6.4 block change (after the id): int x, byte y, int z, short block, byte meta.
+     */
+    private static boolean isDoorTop(final ByteBuf p) {
+        final int i = p.readerIndex();
+        if (p.readableBytes() < 12) return false;
+        final int block = p.getShort(i + 9);
+        final int meta = p.getUnsignedByte(i + 11);
+        return (block == 64 || block == 71) && (meta & 8) != 0;
     }
 
     private void toServer(final ChannelHandlerContext ctx, final ByteBuf packet) {
