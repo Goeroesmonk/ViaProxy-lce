@@ -62,6 +62,7 @@ public final class LceCodec extends ChannelDuplexHandler {
 
     @Override
     public void handlerAdded(final ChannelHandlerContext ctx) {
+        this.ctx = ctx;
         this.net = ctx.alloc().buffer();
         this.stream = ctx.alloc().buffer();
         this.toJava = new LceToJava(ctx.alloc(), this.config.debug());
@@ -508,12 +509,33 @@ public final class LceCodec extends ChannelDuplexHandler {
                 return;
             }
             ctx.fireChannelRead(framed);
+            if ((id == 0x35 || id == 0x34) && this.pendingBlockAck != null) runBlockAck(); // the update is there now
         } finally {
             packet.release();
         }
     }
 
     private static final long DOOR_TOP_DELAY_MS = 120;
+    private static final long BLOCK_ACK_MAX_MS = 1000;
+    private Runnable pendingBlockAck;
+    private ChannelHandlerContext ctx;
+
+    /** Called on the event loop by {@link DelayedBlockAck}: a newer confirmation covers the older ones. */
+    void queueBlockAck(final Runnable ack) {
+        final boolean scheduled = this.pendingBlockAck != null;
+        this.pendingBlockAck = ack;
+        if (!scheduled && this.ctx != null) {
+            this.ctx.executor().schedule(() -> {
+                if (this.pendingBlockAck != null) runBlockAck();
+            }, BLOCK_ACK_MAX_MS, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    private void runBlockAck() {
+        final Runnable ack = this.pendingBlockAck;
+        this.pendingBlockAck = null;
+        ack.run();
+    }
     private static final long SIGN_EDITOR_DELAY_MS = 200;
 
     /**

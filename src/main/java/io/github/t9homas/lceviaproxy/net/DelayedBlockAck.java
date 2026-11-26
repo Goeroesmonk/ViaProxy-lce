@@ -6,17 +6,15 @@ import com.viaversion.viaversion.protocols.v1_18_2to1_19.provider.AckSequencePro
 import io.netty.channel.Channel;
 import net.raphimc.viaproxy.util.logging.Logger;
 
-import java.util.concurrent.TimeUnit;
 
 /**
  * 1.19+ clients predict block changes (a door opens at once) and undo the prediction when the server confirms the click.
  * Old servers have no confirmation, so ViaVersion sends it right away, before the LCE server's block updates arrive:
- * the door flickered back for a frame or two. For LCE servers the confirmation comes a bit later, after the updates
- * (the plugin also holds back a door's top half for 120 ms).
+ * doors and crops flickered back for a frame or two. For LCE servers the confirmation comes after the server's next
+ * block update.
  */
 public final class DelayedBlockAck extends AckSequenceProvider {
 
-    private static final long DELAY_MS = 250;
     private static boolean installed;
 
     public static synchronized void install() {
@@ -32,18 +30,24 @@ public final class DelayedBlockAck extends AckSequenceProvider {
     @Override
     public void handleSequence(final UserConnection user, final int sequence) {
         final Channel channel = user.getChannel();
-        if (channel == null || channel.pipeline().get(LceCodec.NAME) == null) {
+        final LceCodec codec = channel == null ? null : (LceCodec) channel.pipeline().get(LceCodec.NAME);
+        if (codec == null) {
             super.handleSequence(user, sequence); // not an LCE server
             return;
         }
-        channel.eventLoop().schedule(() -> {
+        if (!channel.eventLoop().inEventLoop()) {
+            channel.eventLoop().execute(() -> handleSequence(user, sequence));
+            return;
+        }
+        // confirm after the server's next block update (or after a second)
+        codec.queueBlockAck(() -> {
             if (!channel.isActive()) return;
             try {
                 super.handleSequence(user, sequence);
             } catch (Exception e) {
                 Logger.LOGGER.warn("LCE: could not confirm a block change: " + e);
             }
-        }, DELAY_MS, TimeUnit.MILLISECONDS);
+        });
     }
 
 }
