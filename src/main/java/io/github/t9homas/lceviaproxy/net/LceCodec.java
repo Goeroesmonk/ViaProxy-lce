@@ -1,6 +1,11 @@
 package io.github.t9homas.lceviaproxy.net;
 
 import io.github.t9homas.lceviaproxy.LceConfig;
+import com.viaversion.viaversion.api.connection.UserConnection;
+import com.viaversion.viaversion.api.minecraft.GameProfile;
+import net.raphimc.vialegacy.protocol.release.r1_7_6_10tor1_8.Protocolr1_7_6_10Tor1_8;
+import net.raphimc.vialegacy.protocol.release.r1_7_6_10tor1_8.storage.TablistStorage;
+import net.raphimc.viaproxy.proxy.session.ProxyConnection;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.ChannelDuplexHandler;
@@ -104,7 +109,12 @@ public final class LceCodec extends ChannelDuplexHandler {
         } finally {
             buf.release();
         }
+        process(ctx);
+    }
 
+    /** Parses the buffered server data (also called again after waiting for our skin at login). */
+    private void process(final ChannelHandlerContext ctx) {
+        if (this.net == null || this.state == State.CLOSED) return;
         try {
             if (!this.gotSmallId) {
                 if (!this.net.isReadable()) return;
@@ -203,6 +213,7 @@ public final class LceCodec extends ChannelDuplexHandler {
             }
             case LOGIN -> {
                 if (id == 0x01) {
+                    if (waitForSkin(ctx)) throw new IndexOutOfBoundsException("waiting for our skin");
                     final int entityId = this.stream.readInt();
                     Types.readString(this.stream); // user name (empty)
                     final String levelType = Types.readString(this.stream);
@@ -222,6 +233,7 @@ public final class LceCodec extends ChannelDuplexHandler {
                     this.state = State.PLAY;
                     logPrivileges(privileges);
                     Logger.LOGGER.info("LCE: joined as " + this.userName + " (entity " + entityId + ", game mode " + gameMode + ", dimension " + dimension + ")");
+                    installTablist(ctx);
                     toVia(ctx, this.toJava.javaLogin(entityId, levelType, gameMode & 0x7, dimension, difficulty, maxPlayers));
                     this.toJava.selfName = this.userName;
                     if (this.toJava.skins != null) this.toJava.skins.self(this.userName);
@@ -316,14 +328,55 @@ public final class LceCodec extends ChannelDuplexHandler {
                 + " (the host can change this; privileges belong to your xuid, see the config)"));
     }
 
+    /** Our player list storage in ViaLegacy (keeps our own entry, with our skin). */
+    private void installTablist(final ChannelHandlerContext ctx) {
+        try {
+            final ProxyConnection proxy = ProxyConnection.fromChannel(ctx.channel());
+            final UserConnection user = proxy == null ? null : proxy.getUserConnection();
+            if (user == null || !user.getProtocolInfo().getPipeline().contains(Protocolr1_7_6_10Tor1_8.class)) return;
+            final TablistStorage old =
+                    user.get(TablistStorage.class);
+            // ViaLegacy looks it up by its own class
+            user.getStoredObjects().put(TablistStorage.class, new LceTablist(user, old, () -> this.skin != null && this.skin.texture() != null
+                    ? new GameProfile.Property("textures", this.skin.texture()[0], this.skin.texture()[1]) : null));
+        } catch (Throwable t) {
+            Logger.LOGGER.warn("LCE: could not set up the player list: " + t);
+        }
+    }
+
     // ------------------------------------------------------------------ skin
 
+    /**
+     * The client keeps the first player list entry it gets for itself, so the login waits (up to 3 s) until our skin
+     * was looked up.
+     */
+    private boolean waitForSkin(final ChannelHandlerContext ctx) {
+        if (this.skinDone) return false;
+        final long now = System.currentTimeMillis();
+        if (this.loginWaitStart == 0) {
+            this.loginWaitStart = now;
+            ctx.executor().schedule(() -> process(ctx), SKIN_WAIT_MS + 50, TimeUnit.MILLISECONDS);
+        }
+        return now - this.loginWaitStart < SKIN_WAIT_MS;
+    }
+
+    private static final long SKIN_WAIT_MS = 3000;
+    private boolean skinDone;
+    private long loginWaitStart;
+
     private void onSkin(final ChannelHandlerContext ctx, final JavaSkin.Skin skin) {
-        if (skin == null || this.state == State.CLOSED || !ctx.channel().isActive()) return;
-        this.skin = skin;
-        if (skin.texture() != null && this.toJava.skins != null) this.toJava.skins.selfTexture(skin.texture()[0], skin.texture()[1]);
-        Logger.LOGGER.info("LCE: sending your skin to the server as " + skin.path() + " (" + skin.png().length + " bytes)");
-        if (this.state == State.PLAY) announceSkin(ctx);
+        this.skinDone = true;
+        if (this.state == State.CLOSED || !ctx.channel().isActive()) return;
+        if (skin != null) {
+            this.skin = skin;
+            if (skin.texture() != null && this.toJava.skins != null) this.toJava.skins.selfTexture(skin.texture()[0], skin.texture()[1]);
+            Logger.LOGGER.info("LCE: sending your skin to the server as " + skin.path() + " (" + skin.png().length + " bytes)");
+        }
+        if (this.state == State.LOGIN && this.loginWaitStart != 0) {
+            process(ctx); // the login waited for it (and announces the skin)
+        } else if (skin != null && this.state == State.PLAY) {
+            announceSkin(ctx);
+        }
         // HANDSHAKE / PRE_LOGIN: the login packet carries it; LOGIN: announced when the login finishes
     }
 
