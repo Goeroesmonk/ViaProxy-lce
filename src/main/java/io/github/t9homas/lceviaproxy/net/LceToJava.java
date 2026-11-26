@@ -1152,15 +1152,20 @@ public final class LceToJava {
         final int id = in.getUnsignedByte(at);
         final int end = in.writerIndex();
         switch (id) {
-            case 0x05, 0x12, 0x16, 0x23, 0x26, 0x28, 0x29, 0x2A, 0x2C -> { // int entity id
+            case 0x05 -> { // equipment: entity, slot 0..4, item id (or -1)
+                if (at + 9 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
+                final int slot = in.getShort(at + 5), item = in.getShort(at + 7);
+                return known(in.getInt(at + 1)) && slot >= 0 && slot <= 4 && item >= -1 && item < 4096 ? 2 : -3;
+            }
+            case 0x12, 0x16, 0x23, 0x26, 0x28, 0x29, 0x2A, 0x2C -> { // int entity id
                 if (at + 5 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
                 final int e = in.getInt(at + 1);
-                return known(e) ? 2 : -1;
+                return known(e) ? 2 : -2;
             }
             case 0x1E, 0x1F, 0x20, 0x21, 0x22 -> { // short entity id
                 if (at + 3 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
                 final int e = in.getUnsignedShort(at + 1);
-                return known(e) ? 2 : -1;
+                return known(e) ? 2 : -2;
             }
             case 0x33 -> { // chunk: flags, int x, short y, int z, 3 sizes, int length, then zlib data
                 if (at + 20 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
