@@ -51,6 +51,7 @@ Your user name is the one of your Java client (with `proxy-online-mode` off, any
 ## Known issues
 
 - Skin changes of LCE players show after they come back into view. Capes are not shown.
+- The recipe book does not work: LCE has none, the server sends no recipes and can't place one. Craft in the grid.
 - The tab list shows you and the players the server has sent you (the same as the locator bar): the LCE player list
   packet has no names, so players far away are missing.
 - Revelations' optional encryption (`MC|CKey`) and identity tokens (`MC|CTChallenge`) are not supported. Servers that

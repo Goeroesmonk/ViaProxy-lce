@@ -42,6 +42,8 @@ public final class LceToJava {
     Locator locator;
     /** Skins of LCE players (see LceSkins), null when off. */
     PlayerSkins skins;
+    /** Id of the open crafting table window, -1 if none. */
+    int craftingWindow = -1;
     /** World border and the sea outside the world, null when off. */
     WorldEdge edge;
     /** Our user name (for our own player list entry). */
@@ -663,6 +665,7 @@ public final class LceToJava {
                 if (type == 12) javaType = 1;
                 else if (type >= 13 && type <= 16) javaType = 0;
                 else if (type == 17) javaType = 9;
+                this.craftingWindow = javaType == 1 ? windowId : (this.craftingWindow == windowId ? -1 : this.craftingWindow);
                 final ByteBuf b = pkt(0x64);
                 b.writeByte(windowId);
                 b.writeByte(javaType);
@@ -672,7 +675,10 @@ public final class LceToJava {
                 if (javaType == 11) b.writeInt(eid(entityId));
                 out.add(b);
             }
-            case 0x65 -> copy(in, out, id, "b");
+            case 0x65 -> {
+                if (in.getUnsignedByte(in.readerIndex()) == this.craftingWindow) this.craftingWindow = -1;
+                copy(in, out, id, "b");
+            }
             case 0x67 -> {
                 final ByteBuf b = pkt(0x67);
                 try {

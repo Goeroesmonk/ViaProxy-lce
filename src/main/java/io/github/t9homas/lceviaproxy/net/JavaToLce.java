@@ -96,11 +96,31 @@ public final class JavaToLce {
             }
             case 0x66 -> { // window click
                 final ByteBuf b = pkt(0x66);
+                final int window = in.readUnsignedByte();
+                final int slot = in.readShort();
+                b.writeByte(window);
+                b.writeShort(slot);
                 b.writeByte(in.readByte());
                 b.writeShort(in.readShort());
                 b.writeByte(in.readByte());
-                b.writeShort(in.readShort());
-                b.writeByte(in.readByte());
+                if ((window == 0 && slot >= 0 && slot <= 4) || (window == this.ids.craftingWindow && slot >= 0 && slot <= 9)) {
+                    // The LCE server never sends the crafting result slot (its clients work it out themselves, newer Java
+                    // clients don't). Claim a wrong item: the server still does the click, then sends the whole window
+                    // (with the result) and waits for the client to confirm (ViaVersion: ping / pong).
+                    final boolean clickedNothing = in.getShort(in.readerIndex()) < 0;
+                    final ByteBuf ignored = this.alloc.buffer();
+                    try {
+                        Types.itemJavaToLce(in, ignored);
+                    } finally {
+                        ignored.release();
+                    }
+                    if (clickedNothing) {
+                        b.writeShort(1).writeByte(1).writeShort(0).writeShort(-1); // stone
+                    } else {
+                        b.writeShort(-1);
+                    }
+                    return b;
+                }
                 Types.itemJavaToLce(in, b);
                 return b;
             }
