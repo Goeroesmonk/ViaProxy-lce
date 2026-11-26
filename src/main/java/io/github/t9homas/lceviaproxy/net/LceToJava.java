@@ -908,8 +908,58 @@ public final class LceToJava {
         final boolean smallFits = SERVER_PACKETS.get(in.getUnsignedByte(r + 3));
         final boolean shortsFit = SERVER_PACKETS.get(in.getUnsignedByte(r + 6));
         if (smallFits != shortsFit) return shortsFit;
-        // both readings land on a valid packet id: go by which entity exists
+        // the server only uses shorts when a value does not fit in a byte * 16 (SetEntityMotionPacket::_init)
+        boolean needsShorts = false;
+        for (int i = 0; i < 3; i++) {
+            final int v = in.getShort(r + i * 2);
+            if (v < -128 * 16 || v >= 128 * 16) needsShorts = true;
+        }
+        if (!needsShorts) return false;
+        // both readings land on a valid packet id: does the next packet name an entity we know?
+        // (the server sends metadata / moves / velocity for the same entities in a row)
+        final int small = nextPacketScore(in, r + 3), shorts = nextPacketScore(in, r + 6);
+        if (small != shorts) return shorts > small;
+        // still a tie: go by which entity exists
         return this.spawned.contains(idAndFlag) && !this.spawned.contains(idAndFlag & 0x7FF);
+    }
+
+    /**
+     * How believable a packet starting at {@code at} is: +2 if it is for an entity that exists, -1 if it names an unknown
+     * entity, 0 if it has no entity id (or not enough bytes are there yet).
+     */
+    private int nextPacketScore(final ByteBuf in, final int at) {
+        final int id = in.getUnsignedByte(at);
+        final int end = in.writerIndex();
+        switch (id) {
+            case 0x05, 0x12, 0x23, 0x26, 0x27, 0x28, 0x2A, 0x2C -> { // int entity id
+                if (at + 5 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
+                final int e = in.getInt(at + 1);
+                return e == this.serverEntityId || this.spawned.contains(e) ? 2 : -1;
+            }
+            case 0x1E, 0x1F, 0x20, 0x21, 0x22 -> { // short entity id
+                if (at + 3 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
+                final int e = in.getUnsignedShort(at + 1);
+                return e == this.serverEntityId || this.spawned.contains(e) ? 2 : -1;
+            }
+            case 0x33 -> { // chunk: flags, int x, short y, int z, 3 sizes, int length, then zlib data
+                if (at + 20 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
+                if (in.getUnsignedByte(at + 1) > 3) return -2;
+                final int len = in.getInt(at + 15) & 0x3FFFFFFF;
+                if (len == 0) return 1;
+                return in.getUnsignedByte(at + 19) == 0x78 ? 2 : -2;
+            }
+            case 0xFF -> { // a disconnect in the middle of the stream is unlikely
+                return -1;
+            }
+            case 0x1C, 0xA2, 0xA3, 0xA4, 0xA5 -> { // 11 bit entity id
+                if (at + 3 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
+                final int e = in.getUnsignedShort(at + 1) & 0x7FF;
+                return this.spawned.contains(smallId(e)) ? 1 : -1;
+            }
+            default -> {
+                return 0;
+            }
+        }
     }
 
     // ------------------------------------------------------------------ entity movement (LCE rotations are relative)
