@@ -202,7 +202,7 @@ public final class LceToJava {
                 in.readLong(); // seed
                 final int diff = in.readByte();
                 in.readBoolean(); // new sea level
-                final int newEid = in.readShort();
+                final int newEid = in.readUnsignedShort();
                 in.readShort(); // xz size
                 in.readUnsignedByte(); // hell scale
                 this.dimension = dim;
@@ -635,7 +635,7 @@ public final class LceToJava {
             }
             case 0x3F -> copy(in, out, id, "Sfffffffi");
             case 0x46 -> copy(in, out, id, "bb");
-            case 0x47 -> copy(in, out, id, "ibiii");
+            case 0x47 -> copy(in, out, id, "ebiii");
             case 0x64 -> { // open window
                 final int windowId = in.readUnsignedByte();
                 final int type = in.readUnsignedByte();
@@ -654,7 +654,7 @@ public final class LceToJava {
                 Types.writeString(b, title != null ? title : (type < CONTAINER_TITLES.length ? CONTAINER_TITLES[type] : ""));
                 b.writeByte(size);
                 b.writeBoolean(title != null);
-                if (javaType == 11) b.writeInt(entityId);
+                if (javaType == 11) b.writeInt(eid(entityId));
                 out.add(b);
             }
             case 0x65 -> copy(in, out, id, "b");
@@ -894,12 +894,17 @@ public final class LceToJava {
      * Small move / velocity packets carry only 11 bits of the entity id. Entities with ids >= 2048 arrive cut down:
      * if no entity has the short id but one with the same low 11 bits exists, it is that one.
      */
+    /** An entity the client has: one the server spawned, or ourselves (our id changes and grows with each respawn). */
+    private boolean known(final int id) {
+        return id == this.serverEntityId || this.spawned.contains(id);
+    }
+
     private int smallId(final int packed) {
         final int id = packed & 0x7FF;
-        if (this.spawned.contains(id)) return id;
+        if (known(id)) return id;
         for (int high = 1; high < 32; high++) {
             final int full = id | (high << 11);
-            if (this.spawned.contains(full)) return full;
+            if (known(full)) return full;
         }
         return id;
     }
@@ -927,7 +932,7 @@ public final class LceToJava {
         final int small = nextPacketScore(in, r + 3), shorts = nextPacketScore(in, r + 6);
         if (small != shorts) return shorts > small;
         // still a tie: go by which entity exists
-        return this.spawned.contains(idAndFlag) && !this.spawned.contains(idAndFlag & 0x7FF);
+        return known(idAndFlag) && !known(idAndFlag & 0x7FF);
     }
 
     /**
@@ -941,12 +946,12 @@ public final class LceToJava {
             case 0x05, 0x12, 0x23, 0x26, 0x27, 0x28, 0x2A, 0x2C -> { // int entity id
                 if (at + 5 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
                 final int e = in.getInt(at + 1);
-                return e == this.serverEntityId || this.spawned.contains(e) ? 2 : -1;
+                return known(e) ? 2 : -1;
             }
             case 0x1E, 0x1F, 0x20, 0x21, 0x22 -> { // short entity id
                 if (at + 3 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
                 final int e = in.getUnsignedShort(at + 1);
-                return e == this.serverEntityId || this.spawned.contains(e) ? 2 : -1;
+                return known(e) ? 2 : -1;
             }
             case 0x33 -> { // chunk: flags, int x, short y, int z, 3 sizes, int length, then zlib data
                 if (at + 20 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
@@ -961,7 +966,7 @@ public final class LceToJava {
             case 0x1C, 0xA2, 0xA3, 0xA4, 0xA5 -> { // 11 bit entity id
                 if (at + 3 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
                 final int e = in.getUnsignedShort(at + 1) & 0x7FF;
-                return this.spawned.contains(smallId(e)) ? 1 : -1;
+                return known(smallId(e)) ? 1 : -1;
             }
             default -> {
                 return 0;

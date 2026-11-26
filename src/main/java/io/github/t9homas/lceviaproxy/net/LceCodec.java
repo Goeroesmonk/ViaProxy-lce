@@ -132,6 +132,9 @@ public final class LceCodec extends ChannelDuplexHandler {
                     }
                 } catch (IndexOutOfBoundsException incomplete) {
                     this.stream.resetReaderIndex();
+                    if (this.config.debug() && this.stream.readableBytes() > 256 * 1024) {
+                        Logger.LOGGER.info("[LCE] still waiting for packet 0x" + Integer.toHexString(id) + " with " + this.stream.readableBytes() + " bytes buffered: " + incomplete);
+                    }
                     // no packet is this big: a misread length, the game would just freeze
                     if (this.stream.readableBytes() > MAX_PENDING) {
                         this.stream.skipBytes(1); // history() expects to be right after the id
