@@ -1152,7 +1152,7 @@ public final class LceToJava {
         final int id = in.getUnsignedByte(at);
         final int end = in.writerIndex();
         switch (id) {
-            case 0x05, 0x12, 0x16, 0x23, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2C -> { // int entity id
+            case 0x05, 0x12, 0x16, 0x23, 0x26, 0x28, 0x29, 0x2A, 0x2C -> { // int entity id
                 if (at + 5 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
                 final int e = in.getInt(at + 1);
                 return known(e) ? 2 : -1;
@@ -1168,6 +1168,21 @@ public final class LceToJava {
                 final int len = in.getInt(at + 15) & 0x3FFFFFFF;
                 if (len == 0) return 1;
                 return in.getUnsignedByte(at + 19) == 0x78 ? 2 : -2;
+            }
+            case 0x27 -> { // attach: rider and vehicle (-1 = none) must exist, type 0 / 1
+                if (at + 10 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
+                final int rider = in.getInt(at + 1), vehicle = in.getInt(at + 5), type = in.getUnsignedByte(at + 9);
+                return known(rider) && (vehicle == -1 || known(vehicle)) && type <= 1 ? 2 : -2;
+            }
+            case 0x04 -> { // time: world age and day time, both small positive numbers
+                if (at + 17 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
+                final long age = in.getLong(at + 1), time = in.getLong(at + 9);
+                return age >= 0 && age < (1L << 40) && Math.abs(time) < (1L << 40) ? 1 : -2;
+            }
+            case 0x18 -> { // mob spawn: a real mob type
+                if (at + 4 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
+                final int type = in.getUnsignedByte(at + 3);
+                return type >= 48 && type <= 120 ? 1 : -2;
             }
             case 0xFF -> { // a disconnect in the middle of the stream is unlikely
                 return -1;
