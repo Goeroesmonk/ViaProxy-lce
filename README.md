@@ -24,11 +24,10 @@ Your user name is the one of your Java client (with `proxy-online-mode` off, any
 - Play on Revelations servers: world, entities, inventories, chat, sounds, signs, ...
 - **Your skin for LCE players:** your Java skin is sent to the server, so LCE players see it.
 - **Skins of LCE players** (1.8+ clients): the default skins and the skins of the DLC packs that come with the
-  Revelations client are shown. The plugin ships a list of their signed Mojang textures (made once with
-  [MineSkin](https://mineskin.org); the plugin itself never uploads anything). Skins from packs only the server has
+  Revelations client are shown. The plugin ships a list of their signed Mojang textures. Skins from packs only the server has
   show as Steve / Alex. Players with a custom skin (like other players using this plugin) get the Java skin of their name.
 - **Locator bar** (1.21.6+ clients): the other players show up on the locator bar, each in a color made from their name.
-  It shows every player the server sends you (the same players a minimap like Xaero's shows): LCE servers send players
+  It shows every player the server sends you: LCE servers send players
   within the server's view distance (up to 512 blocks), also outside your own render distance.
 - Server list: shows the player count of the server.
 
