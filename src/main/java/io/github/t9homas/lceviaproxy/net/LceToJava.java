@@ -237,6 +237,8 @@ public final class LceToJava {
                 this.vehiclePos.clear();
                 this.vehicleTop.clear();
                 this.riding = -1;
+                if (this.dismountPosition != null) this.dismountPosition.release();
+                this.dismountPosition = null;
                 if (this.locator != null) this.locator.clear();
                 if (this.skins != null) {
                     this.skins.clear();
@@ -275,6 +277,12 @@ public final class LceToJava {
                         this.heldSince = System.currentTimeMillis();
                         break;
                     }
+                }
+                if (this.riding >= 0) {
+                    // getting out: the server puts us next to the vehicle (findStandUpPosition) before it tells us we
+                    // stopped riding, while the client still sits in the vehicle; repeat it after the dismount
+                    if (this.dismountPosition != null) this.dismountPosition.release();
+                    this.dismountPosition = b.copy();
                 }
                 out.add(b);
             }
@@ -493,6 +501,8 @@ public final class LceToJava {
                 if (rider == this.serverEntityId && type == 0) {
                     if (vehicle >= 0) {
                         this.riding = vehicle;
+                        if (this.dismountPosition != null) this.dismountPosition.release();
+                        this.dismountPosition = null;
                     } else {
                         dismount(out);
                     }
@@ -1188,6 +1198,8 @@ public final class LceToJava {
     /** Vehicle entity id -> top of the vehicle above its position, in blocks. */
     private final Map<Integer, Double> vehicleTop = new HashMap<>();
     private int riding = -1;
+    /** The last position the server sent while we were riding (where it puts us when we get out). */
+    private ByteBuf dismountPosition;
     /** The Java client's last rotation (from its move packets). */
     float clientYaw, clientPitch;
 
@@ -1220,6 +1232,14 @@ public final class LceToJava {
      * vehicle, Entity::ride). Java clients wait for the server, so they stayed inside the vehicle. Do what the LCE client does.
      */
     private void dismount(final List<ByteBuf> out) {
+        if (this.dismountPosition != null) {
+            // the exact spot the server teleported us to (the client must confirm it exactly, see PlayerConnection::handleMovePlayer)
+            out.add(this.dismountPosition);
+            this.dismountPosition = null;
+            this.riding = -1;
+            if (this.debug) debugLog("Dismounted: placed where the server put us");
+            return;
+        }
         final int[] p = this.vehiclePos.get(this.riding);
         final Double top = this.vehicleTop.get(this.riding);
         this.riding = -1;
