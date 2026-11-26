@@ -274,6 +274,9 @@ public final class LceToJava {
                 final List<ByteBuf> one = new ArrayList<>(1);
                 copy(in, one, id, "ddddffb");
                 final ByteBuf b = one.get(0);
+                if (this.debug) {
+                    debugLog("Server position " + b.getDouble(1) + " " + b.getDouble(17) + " " + b.getDouble(25) + (this.riding >= 0 ? " (riding)" : ""));
+                }
                 if (this.expectSpawn) {
                     // the spawn position: comes before the chunks around it, the client may sink in a bit
                     this.expectSpawn = false;
@@ -287,6 +290,7 @@ public final class LceToJava {
                     // stopped riding, while the client still sits in the vehicle; repeat it after the dismount
                     if (this.dismountPosition != null) this.dismountPosition.release();
                     this.dismountPosition = b.copy();
+                    this.dismountPositionAt = System.currentTimeMillis();
                 }
                 out.add(b);
             }
@@ -1282,6 +1286,7 @@ public final class LceToJava {
     private int riding = -1;
     /** The last position the server sent while we were riding (where it puts us when we get out). */
     private ByteBuf dismountPosition;
+    private long dismountPositionAt;
     /** The Java client's last rotation (from its move packets). */
     float clientYaw, clientPitch;
 
@@ -1315,11 +1320,18 @@ public final class LceToJava {
      */
     private void dismount(final List<ByteBuf> out) {
         if (this.dismountPosition != null) {
-            // the exact spot the server teleported us to (the client must confirm it exactly, see PlayerConnection::handleMovePlayer)
-            out.add(this.dismountPosition);
+            final ByteBuf pos = this.dismountPosition;
             this.dismountPosition = null;
             this.riding = -1;
-            if (this.debug) debugLog("Dismounted: placed where the server put us");
+            // the stand-up teleport comes right before the dismount; an older position is from the ride, not where we stand
+            if (System.currentTimeMillis() - this.dismountPositionAt < 1000) {
+                // the exact spot the server teleported us to (the client must confirm it exactly, see PlayerConnection::handleMovePlayer)
+                out.add(pos);
+                if (this.debug) debugLog("Dismounted: placed where the server put us");
+            } else {
+                pos.release();
+                if (this.debug) debugLog("Dismounted: no fresh position from the server, position left alone");
+            }
             return;
         }
         final int[] p = this.vehiclePos.get(this.riding);
