@@ -13,16 +13,17 @@ import net.raphimc.viaproxy.util.logging.Logger;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Gives LCE players their skin in the Java client. The client takes a player's skin from its player list entry;
- * ViaLegacy only adds a temporary entry without skin when a player spawns (and removes it 2 ticks later), so the plugin
- * sends its own entry with the signed texture from {@link LceSkins}:
+ * Player list entries for the LCE players the server spawned for us: they carry the skin, and they keep the players in
+ * the tab list (ViaLegacy only adds a temporary entry when a player spawns and removes it 2 ticks later; the LCE player
+ * list packet has no names).
  * <ul>
- *     <li>before the spawn: newer clients keep the first entry of a player and need it to create the player</li>
- *     <li>right after the spawn: older clients (1.8 - 1.19.2) keep the last entry</li>
- *     <li>after ViaLegacy removed its temporary entry, in case the client had not looked the skin up yet</li>
+ *     <li>skins from {@link LceSkins}: sent before the spawn (newer clients keep the first entry of a player and need it
+ *     to create the player), right after it (1.8 - 1.19.2 keep the last entry) and after ViaLegacy removed its entry</li>
+ *     <li>other players: sent after ViaLegacy removed its entry, with the profile ViaLegacy used</li>
  * </ul>
  * The entry is removed again when the player despawns.
  */
@@ -30,10 +31,13 @@ final class PlayerSkins {
 
     private static final long READD_DELAY_MS = 400; // ViaLegacy removes its entry after 2 ticks
 
+    private record Entry(String name, UUID uuid) {
+    }
+
     private final Channel channel;
     private final boolean debug;
-    /** server entity id -> name of players with an entry from us */
-    private final Map<Integer, String> shown = new HashMap<>();
+    /** server entity id -> player with an entry from us */
+    private final Map<Integer, Entry> shown = new HashMap<>();
 
     PlayerSkins(final Channel channel, final boolean debug) {
         this.channel = channel;
@@ -41,34 +45,41 @@ final class PlayerSkins {
     }
 
     void beforeSpawn(final int eid, final String name) {
-        if (LceSkins.texture(name) == null) return;
-        this.shown.put(eid, name);
-        add(name);
+        final Entry e = new Entry(name, LceSkins.javaUuid(name));
+        this.shown.put(eid, e);
+        if (LceSkins.texture(name) != null) send(e, true);
     }
 
     void afterSpawn(final int eid, final String name) {
-        if (!name.equals(this.shown.get(eid))) return;
-        add(name);
+        final Entry e = this.shown.get(eid);
+        if (e == null || !e.name.equals(name)) return;
+        if (LceSkins.texture(name) != null) send(e, true);
         this.channel.eventLoop().schedule(() -> {
-            if (this.channel.isActive() && name.equals(this.shown.get(eid))) add(name);
+            if (this.channel.isActive() && e.equals(this.shown.get(eid))) send(e, true);
+        }, READD_DELAY_MS, TimeUnit.MILLISECONDS);
+    }
+
+    /** Our own entry (ViaLegacy removes it too), after login and respawn. */
+    void self(final String name) {
+        this.channel.eventLoop().schedule(() -> {
+            final ProxyConnection proxy = ProxyConnection.fromChannel(this.channel);
+            final UserConnection user = proxy == null ? null : proxy.getUserConnection();
+            if (!this.channel.isActive() || user == null || user.getProtocolInfo().getUuid() == null) return;
+            send(new Entry(name, user.getProtocolInfo().getUuid()), true);
         }, READD_DELAY_MS, TimeUnit.MILLISECONDS);
     }
 
     void remove(final int eid) {
-        final String name = this.shown.remove(eid);
-        if (name != null && !this.shown.containsValue(name)) send(name, false);
+        final Entry e = this.shown.remove(eid);
+        if (e != null && !this.shown.containsValue(e)) send(e, false);
     }
 
     void clear() {
-        for (String name : this.shown.values()) send(name, false);
+        for (Entry e : this.shown.values()) send(e, false);
         this.shown.clear();
     }
 
-    private void add(final String name) {
-        send(name, true);
-    }
-
-    private void send(final String name, final boolean add) {
+    private void send(final Entry e, final boolean add) {
         final ProxyConnection proxy = ProxyConnection.fromChannel(this.channel);
         final UserConnection user = proxy == null ? null : proxy.getUserConnection();
         if (user == null || !user.getProtocolInfo().getPipeline().contains(Protocolr1_7_6_10Tor1_8.class)) return; // 1.7 clients
@@ -76,19 +87,19 @@ final class PlayerSkins {
             final PacketWrapper p = PacketWrapper.create(ClientboundPackets1_8.PLAYER_INFO, user);
             p.write(Types.VAR_INT, add ? 0 : 4);
             p.write(Types.VAR_INT, 1);
-            p.write(Types.UUID, LceSkins.uuid(name));
+            p.write(Types.UUID, e.uuid);
             if (add) {
-                final GameProfile.Property texture = LceSkins.texture(name);
-                p.write(Types.STRING, name);
-                p.write(Types.PROFILE_PROPERTY_ARRAY, new GameProfile.Property[]{texture});
+                final GameProfile.Property[] properties = LceSkins.properties(e.name, e.uuid);
+                p.write(Types.STRING, e.name);
+                p.write(Types.PROFILE_PROPERTY_ARRAY, properties);
                 p.write(Types.VAR_INT, 0); // game mode
                 p.write(Types.VAR_INT, 0); // ping
                 p.write(Types.OPTIONAL_STRING, null); // no display name
             }
             p.send(Protocolr1_7_6_10Tor1_8.class);
-            if (this.debug) Logger.LOGGER.info("[LCE] skin entry " + (add ? "for " : "removed for ") + name);
-        } catch (Exception e) {
-            Logger.LOGGER.warn("LCE: could not send the skin of " + name + ": " + e);
+            if (this.debug) Logger.LOGGER.info("[LCE] player list entry " + (add ? "for " : "removed for ") + e.name);
+        } catch (Exception ex) {
+            Logger.LOGGER.warn("LCE: could not send the player list entry of " + e.name + ": " + ex);
         }
     }
 

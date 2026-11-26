@@ -213,6 +213,8 @@ public final class LceCodec extends ChannelDuplexHandler {
                     this.state = State.PLAY;
                     Logger.LOGGER.info("LCE: joined as " + this.userName + " (entity " + entityId + ", game mode " + gameMode + ", dimension " + dimension + ")");
                     toVia(ctx, this.toJava.javaLogin(entityId, levelType, gameMode & 0x7, dimension, difficulty, maxPlayers));
+                    this.toJava.selfName = this.userName;
+                    if (this.toJava.skins != null) this.toJava.skins.self(this.userName);
                     if (this.skin != null && !this.loginHadSkin) announceSkin(ctx);
                     return true;
                 }

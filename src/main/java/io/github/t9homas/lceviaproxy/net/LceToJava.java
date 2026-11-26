@@ -42,6 +42,8 @@ public final class LceToJava {
     Locator locator;
     /** Skins of LCE players (see LceSkins), null when off. */
     PlayerSkins skins;
+    /** Our user name (for our own player list entry). */
+    String selfName;
     /** Run before / after the translated packets went to ViaLegacy. */
     private final java.util.ArrayDeque<Runnable> before = new java.util.ArrayDeque<>();
     private final java.util.ArrayDeque<Runnable> after = new java.util.ArrayDeque<>();
@@ -217,7 +219,10 @@ public final class LceToJava {
                 this.vehicleTop.clear();
                 this.riding = -1;
                 if (this.locator != null) this.locator.clear();
-                if (this.skins != null) this.skins.clear();
+                if (this.skins != null) {
+                    this.skins.clear();
+                    if (this.selfName != null) this.skins.self(this.selfName);
+                }
                 if (newEid > 0) {
                     if (this.debug && newEid != this.serverEntityId) {
                         debugLog("Respawn: server entity id " + this.serverEntityId + " -> " + newEid + " (client keeps " + this.playerEntityId + ")");

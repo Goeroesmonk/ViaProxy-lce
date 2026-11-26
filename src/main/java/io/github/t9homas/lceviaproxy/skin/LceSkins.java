@@ -104,6 +104,38 @@ public final class LceSkins {
         return p == null || p.profile.properties().length == 0 ? null : p.profile.properties()[0];
     }
 
+    /**
+     * The UUID ViaLegacy gave the player: the offline UUID, or (with ViaLegacy's legacy skin loading) the Mojang one of
+     * a name not in our list.
+     */
+    public static UUID javaUuid(final String name) {
+        if (!BY_NAME.containsKey(name.toLowerCase())) {
+            try {
+                if (net.raphimc.vialegacy.ViaLegacy.getConfig().isLegacySkinLoading()) {
+                    final GameProfileFetcher f = Via.getManager().getProviders().get(GameProfileFetcher.class);
+                    if (f != null && f.isUuidLoaded(name)) return f.getMojangUuid(name);
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return uuid(name);
+    }
+
+    /** The skin properties for the player's list entry (ours, or the profile ViaLegacy loaded); may be empty. */
+    public static GameProfile.Property[] properties(final String name, final UUID uuid) {
+        final Player p = BY_NAME.get(name.toLowerCase());
+        if (p != null) return p.profile.properties();
+        try {
+            final GameProfileFetcher f = Via.getManager().getProviders().get(GameProfileFetcher.class);
+            if (f != null && f.isGameProfileLoaded(uuid)) {
+                final GameProfile profile = f.getGameProfile(uuid);
+                if (profile != null && profile.properties() != null) return profile.properties();
+            }
+        } catch (Throwable ignored) {
+        }
+        return new GameProfile.Property[0];
+    }
+
     public static int size() {
         return TEXTURES.size();
     }
