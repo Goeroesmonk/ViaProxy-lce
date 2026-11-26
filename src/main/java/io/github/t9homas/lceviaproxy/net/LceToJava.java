@@ -152,7 +152,8 @@ public final class LceToJava {
             throw e;
         }
         if (this.heldPosition != null && System.currentTimeMillis() - this.heldSince > HOLD_POSITION_MS) {
-            releasePosition(list); // the chunks did not all come (world border, slow server): spawn anyway
+            net.raphimc.viaproxy.util.logging.Logger.LOGGER.info("LCE: the chunks around the spawn did not all come within " + HOLD_POSITION_MS + " ms, spawning anyway");
+            releasePosition(list); // the chunks did not all come (slow server): spawn anyway
         }
         Runnable r;
         while ((r = this.before.poll()) != null) r.run();
@@ -267,14 +268,15 @@ public final class LceToJava {
                 final ByteBuf b = one.get(0);
                 if (this.waitForTerrain || this.heldPosition != null) {
                     this.waitForTerrain = false;
-                    if (this.heldPosition != null) this.heldPosition.release();
+                    final boolean replacing = this.heldPosition != null;
+                    if (replacing) this.heldPosition.release();
                     this.heldPosition = null;
                     this.heldCx = (int) Math.floor(b.getDouble(1)) >> 4;
                     this.heldCz = (int) Math.floor(b.getDouble(1 + 24)) >> 4;
                     if (!terrainAround(this.heldCx, this.heldCz)) {
                         // hold the spawn position: the client stays on the loading screen until the chunks around it are there
                         this.heldPosition = b;
-                        this.heldSince = System.currentTimeMillis();
+                        if (!replacing) this.heldSince = System.currentTimeMillis(); // the limit counts from the first one
                         break;
                     }
                 }
@@ -1278,7 +1280,8 @@ public final class LceToJava {
     private boolean terrainAround(final int cx, final int cz) {
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
-                if (!this.loadedChunks.contains(chunkKey(cx + dx, cz + dz))) return false;
+                if (!this.loadedChunks.contains(chunkKey(cx + dx, cz + dz))
+                        && (this.edge == null || !this.edge.drawsSea(this.dimension, cx + dx, cz + dz))) return false;
             }
         }
         return true;
