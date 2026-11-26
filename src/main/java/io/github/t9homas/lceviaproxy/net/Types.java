@@ -193,7 +193,12 @@ public final class Types {
                 return;
             }
             switch (header >> 5) {
-                case 0 -> out.writeByte(in.readByte());
+                case 0 -> {
+                    final byte v = in.readByte();
+                    // entity flags (index 0): LCE uses bits 0x40 / 0x80 for its own things, newer Java clients read
+                    // them as glowing / elytra flying
+                    out.writeByte(header == 0x00 ? v & 0x3F : v);
+                }
                 case 1 -> out.writeShort(in.readShort());
                 case 2, 3 -> out.writeInt(in.readInt());
                 case 4 -> writeString(out, readString(in));

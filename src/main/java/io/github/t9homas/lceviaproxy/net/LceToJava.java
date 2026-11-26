@@ -917,8 +917,11 @@ public final class LceToJava {
      * if no entity has the short id but one with the same low 11 bits exists, it is that one.
      */
     /** An entity the client has: one the server spawned, or ourselves (our id changes and grows with each respawn). */
+    /** Entities spawned in the packets a velocity check looks ahead at. */
+    private final java.util.Set<Integer> chainKnown = new java.util.HashSet<>();
+
     private boolean known(final int id) {
-        return id == this.serverEntityId || this.spawned.contains(id);
+        return id == this.serverEntityId || this.spawned.contains(id) || this.chainKnown.contains(id);
     }
 
     private int smallId(final int packed) {
@@ -952,7 +955,11 @@ public final class LceToJava {
         // both readings land on a valid packet id: does the next packet name an entity we know?
         // (the server sends metadata / moves / velocity for the same entities in a row)
         final int limit = r + 6 + 64; // both readings are scored over the same bytes
-        final int small = chainScore(in, r + 3, limit), shorts = chainScore(in, r + 6, limit);
+        // decide only with the whole window there (at the end of the received data the chains are too short)
+        if (in.writerIndex() < limit) throw new IndexOutOfBoundsException("velocity: waiting for more packets");
+        this.chainKnown.clear();
+        final int small = chainScore(in, r + 3, limit, 0x1C, true), shorts = chainScore(in, r + 6, limit, 0x1C, true);
+        this.chainKnown.clear();
         if (this.debug && shorts > small) {
             debugLog("velocity read as shorts 0x" + Integer.toHexString(idAndFlag) + ": bytes score " + small + ", shorts score " + shorts + " "
                     + io.netty.buffer.ByteBufUtil.hexDump(in, r, Math.min(in.readableBytes(), 24)));
@@ -965,13 +972,16 @@ public final class LceToJava {
      * How believable the packets starting at {@code at} are: follows the packets of a known size up to {@code limit} (moves, head
      * rotations, ...) and adds up {@link #nextPacketScore}; an invalid packet id on the way costs 3.
      */
-    private int chainScore(final ByteBuf in, int at, final int limit) {
+    private int chainScore(final ByteBuf in, int at, final int limit, int previous, boolean first) {
         int total = 0;
-        for (int step = 0; at < limit && at < in.writerIndex(); step++) {
+        while (at < limit && at < in.writerIndex()) {
             final int id = in.getUnsignedByte(at);
             if (!SERVER_PACKETS.get(id)) return total - 3;
-            if (step == 0) {
+            if (id == 0x00 && previous == 0x00) total -= 2; // misread zeros look like keep alives (one a second)
+            previous = id;
+            if (first) {
                 total += nextPacketScore(in, at); // may wait for more data
+                first = false;
             } else {
                 try {
                     total += nextPacketScore(in, at);
@@ -979,10 +989,15 @@ public final class LceToJava {
                     return total;
                 }
             }
+            if (id == 0x1C && at + 3 <= in.writerIndex() && (in.getUnsignedShort(at + 1) & 0x800) != 0) {
+                // another ambiguous velocity: follow both readings
+                return total + Math.max(chainScore(in, at + 6, limit, id, false), chainScore(in, at + 9, limit, id, false));
+            }
             int len = fixedLength(id);
-            if (id == 0x1C && at + 3 <= in.writerIndex()) len = (in.getUnsignedShort(at + 1) & 0x800) != 0 ? 6 : 9; // velocity
+            if (id == 0x1C) len = 9; // velocity without the flag
             if (len == 0) len = variableLength(in, at, id);
             if (len <= 0) return total;
+            if (id == 0x17 || id == 0x18) this.chainKnown.add(in.getUnsignedShort(at + 1)); // spawned on the way
             at += len;
         }
         return total;
@@ -1012,6 +1027,20 @@ public final class LceToJava {
                         if (mods < 0 || mods > 64) return -1;
                         p += 2 + mods * (4 + 8 + 1);
                     }
+                }
+                case 0x17 -> { // object spawn
+                    p += 2 + 1 + 12 + 2;
+                    final int data = in.getInt(p);
+                    p += 4 + (data > -1 ? 6 : 0);
+                }
+                case 0x18 -> { // mob spawn
+                    p += 2 + 1 + 12 + 3 + 6;
+                    p = skipMetadata(in, p);
+                }
+                case 0x1D -> { // destroy
+                    final int count = in.getByte(p);
+                    if (count < 0 || count > 64) return -1;
+                    p += 1 + count * 4;
                 }
                 case 0x33 -> { // chunk
                     if (in.getUnsignedByte(p) > 3) return -1;
@@ -1066,7 +1095,17 @@ public final class LceToJava {
     private static int fixedLength(final int id) {
         return switch (id) {
             case 0x00 -> 5;          // keep alive
+            case 0x10 -> 3;          // held item
             case 0x04 -> 17;         // time
+            case 0x06 -> 13;         // spawn position
+            case 0x08 -> 12;         // health
+            case 0x16 -> 9;          // collect item
+            case 0x29 -> 9;          // mob effect
+            case 0x35 -> 13;         // block change
+            case 0x3D -> 19;         // level event
+            case 0x3E -> 25;         // sound
+            case 0x46 -> 3;          // game event
+            case 0x47 -> 18;         // lightning
             case 0x12, 0x23, 0x26, 0x2A -> 6; // int entity id + byte
             case 0x1E, 0xA2, 0xA4 -> 3;
             case 0xA3 -> 4;
@@ -1088,7 +1127,7 @@ public final class LceToJava {
         final int id = in.getUnsignedByte(at);
         final int end = in.writerIndex();
         switch (id) {
-            case 0x05, 0x12, 0x23, 0x26, 0x27, 0x28, 0x2A, 0x2C -> { // int entity id
+            case 0x05, 0x12, 0x16, 0x23, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2C -> { // int entity id
                 if (at + 5 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
                 final int e = in.getInt(at + 1);
                 return known(e) ? 2 : -1;
