@@ -1132,6 +1132,7 @@ public final class LceToJava {
             case 0x04 -> 17;         // time
             case 0x06 -> 13;         // spawn position
             case 0x08 -> 12;         // health
+            case 0x32 -> 10;         // chunk visibility
             case 0x16 -> 9;          // collect item
             case 0x29 -> 9;          // mob effect
             case 0x35 -> 13;         // block change
@@ -1186,6 +1187,18 @@ public final class LceToJava {
                 if (at + 10 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
                 final int rider = in.getInt(at + 1), vehicle = in.getInt(at + 5), type = in.getUnsignedByte(at + 9);
                 return known(rider) && (vehicle == -1 || known(vehicle)) && type <= 1 ? 2 : -2;
+            }
+            case 0x08 -> { // health (only ever about us): health, food 0..20, saturation 0..20, damage source
+                if (at + 12 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
+                final float health = in.getFloat(at + 1), saturation = in.getFloat(at + 7);
+                final int food = in.getShort(at + 5);
+                return health >= 0 && health <= 1000 && (health == 0 || health >= 0.001F) && food >= 0 && food <= 20
+                        && saturation >= 0 && saturation <= 20 ? 0 : -4;
+            }
+            case 0x32 -> { // chunk visibility: a sensible chunk, visible 0 / 1
+                if (at + 10 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
+                final int cx = in.getInt(at + 1), cz = in.getInt(at + 5), v = in.getUnsignedByte(at + 9);
+                return Math.abs(cx) < 2048 && Math.abs(cz) < 2048 && v <= 1 ? 1 : -3;
             }
             case 0x04 -> { // time: world age and day time, both small positive numbers
                 if (at + 17 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
