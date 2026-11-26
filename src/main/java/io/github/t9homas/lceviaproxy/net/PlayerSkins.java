@@ -50,7 +50,7 @@ final class PlayerSkins {
         if (!name.equals(this.shown.get(eid))) return;
         add(name);
         this.channel.eventLoop().schedule(() -> {
-            if (name.equals(this.shown.get(eid))) add(name);
+            if (this.channel.isActive() && name.equals(this.shown.get(eid))) add(name);
         }, READD_DELAY_MS, TimeUnit.MILLISECONDS);
     }
 

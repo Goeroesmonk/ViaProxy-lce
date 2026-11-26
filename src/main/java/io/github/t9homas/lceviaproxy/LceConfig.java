@@ -25,7 +25,7 @@ public final class LceConfig {
              srv-lookup: follow _minecraft._tcp SRV records when no port is given (LCE clients do this too).
              skin: the skin LCE players see on you. "auto" = the Java skin of your user name (from Mojang),
                    another player's name, a path to a 64x64 / 64x32 PNG file, or "none" (server picks a default skin).
-             lce-skins: show the skins of LCE players (default and DLC skins; turns on ViaLegacy's legacy skin loading).
+             lce-skins: show the skins of LCE players (default and DLC skins, from a list built into the plugin).
              locator-bar: show the other players on the locator bar of 1.21.6+ clients, colored by name.
              debug: log unknown / dropped packets.
             """;

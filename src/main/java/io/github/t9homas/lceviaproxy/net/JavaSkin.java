@@ -61,7 +61,8 @@ public final class JavaSkin {
                         Logger.LOGGER.info("LCE: no Java skin found for " + name + ", the server picks a default skin");
                         return null;
                     }
-                    slim = skin.has("metadata") && "slim".equals(skin.getAsJsonObject("metadata").get("model").getAsString());
+                    slim = skin.has("metadata") && skin.getAsJsonObject("metadata").has("model")
+                            && "slim".equals(skin.getAsJsonObject("metadata").get("model").getAsString());
                     image = ImageIO.read(new ByteArrayInputStream(get(skin.get("url").getAsString())));
                 }
                 if (image == null || image.getWidth() != 64 || (image.getHeight() != 64 && image.getHeight() != 32)) {

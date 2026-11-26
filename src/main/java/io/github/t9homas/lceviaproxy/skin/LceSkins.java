@@ -77,7 +77,12 @@ public final class LceSkins {
     public static void register(final String name, final int skinId, final int playerIndex) {
         final String key = keyFor(skinId, playerIndex);
         // custom skin (other Java players through this plugin use one): ViaLegacy looks the name up at Mojang as usual
-        if (key == null) return;
+        if (key == null) {
+            // forget a skin the name had before (it switched to a custom skin)
+            final Player old = BY_NAME.remove(name.toLowerCase());
+            if (old != null) BY_UUID.remove(old.uuid);
+            return;
+        }
         final Texture t = TEXTURES.get(key);
         final UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + name).getBytes(StandardCharsets.UTF_8));
         // a skin that is not in the list (a pack only the server has): no skin rather than a random Java player's

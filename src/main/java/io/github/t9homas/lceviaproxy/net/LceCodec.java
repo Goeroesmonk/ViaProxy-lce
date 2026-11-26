@@ -26,6 +26,7 @@ public final class LceCodec extends ChannelDuplexHandler {
     public static final String NAME = "lce-codec";
 
     private static final int MAX_FRAME = 4 * 1024 * 1024;
+    private static final int MAX_PENDING = 32 * 1024 * 1024;
     private static final int JAVA_PROTOCOL = 78; // 1.6.4
 
     private enum State {HANDSHAKE, PRE_LOGIN, LOGIN, PLAY, PING, CLOSED}
@@ -131,6 +132,11 @@ public final class LceCodec extends ChannelDuplexHandler {
                     }
                 } catch (IndexOutOfBoundsException incomplete) {
                     this.stream.resetReaderIndex();
+                    // no packet is this big: a misread length, the game would just freeze
+                    if (this.stream.readableBytes() > MAX_PENDING) {
+                        this.stream.skipBytes(1); // history() expects to be right after the id
+                        throw new IllegalStateException("LCE packet " + id + " (0x" + Integer.toHexString(id) + ") never completes, stream out of sync" + history());
+                    }
                     break;
                 }
                 if (this.stream != null) remember(id, start);

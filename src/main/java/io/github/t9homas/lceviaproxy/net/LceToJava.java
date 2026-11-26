@@ -250,16 +250,16 @@ public final class LceToJava {
                 }
                 this.rotations.put(eid, new byte[]{yaw, pitch});
                 this.spawned.add(eid);
-                if (this.locator != null) this.locator.add(eid, name, x, y, z);
+                final String javaName = name.length() > 16 ? name.substring(0, 16) : name;
+                if (this.locator != null) this.locator.add(eid, javaName, x, y, z);
                 if (this.skins != null) {
-                    final String javaName = name.length() > 16 ? name.substring(0, 16) : name;
                     io.github.t9homas.lceviaproxy.skin.LceSkins.register(javaName, skinId, playerIndex);
                     this.before.add(() -> this.skins.beforeSpawn(eid, javaName));
                     this.after.add(() -> this.skins.afterSpawn(eid, javaName));
                 }
                 final ByteBuf b = pkt(0x14);
                 b.writeInt(eid(eid));
-                Types.writeString(b, name.length() > 16 ? name.substring(0, 16) : name);
+                Types.writeString(b, javaName);
                 b.writeInt(x);
                 b.writeInt(y);
                 b.writeInt(z);
@@ -441,24 +441,27 @@ public final class LceToJava {
                         final double base = in.readDouble();
                         final int mods = in.readShort();
                         final ByteBuf modBuf = this.alloc.buffer();
-                        for (int j = 0; j < mods; j++) {
-                            final int modId = in.readInt();
-                            final double amount = in.readDouble();
-                            final byte op = in.readByte();
-                            final UUID uuid = UUID.nameUUIDFromBytes(("LCEModifier" + modId).getBytes());
-                            modBuf.writeLong(uuid.getMostSignificantBits());
-                            modBuf.writeLong(uuid.getLeastSignificantBits());
-                            modBuf.writeDouble(amount);
-                            modBuf.writeByte(op);
+                        try {
+                            for (int j = 0; j < mods; j++) {
+                                final int modId = in.readInt();
+                                final double amount = in.readDouble();
+                                final byte op = in.readByte();
+                                final UUID uuid = UUID.nameUUIDFromBytes(("LCEModifier" + modId).getBytes());
+                                modBuf.writeLong(uuid.getMostSignificantBits());
+                                modBuf.writeLong(uuid.getLeastSignificantBits());
+                                modBuf.writeDouble(amount);
+                                modBuf.writeByte(op);
+                            }
+                            if (attr >= 0 && attr < ATTRIBUTES.length) {
+                                Types.writeString(body, ATTRIBUTES[attr]);
+                                body.writeDouble(base);
+                                body.writeShort(mods);
+                                body.writeBytes(modBuf);
+                                written++;
+                            }
+                        } finally {
+                            modBuf.release(); // also when the packet is not complete yet
                         }
-                        if (attr >= 0 && attr < ATTRIBUTES.length) {
-                            Types.writeString(body, ATTRIBUTES[attr]);
-                            body.writeDouble(base);
-                            body.writeShort(mods);
-                            body.writeBytes(modBuf);
-                            written++;
-                        }
-                        modBuf.release();
                     }
                 } catch (Exception | Error e) {
                     body.release();
@@ -919,6 +922,8 @@ public final class LceToJava {
         int size = in.readInt();
         final int levelIdx = (size >> 30) & 3;
         size &= 0x3FFFFFFF;
+        if (size > 16 * 1024 * 1024) throw new IllegalStateException("chunk data too big (" + size + " bytes), stream out of sync");
+        if (in.readableBytes() < size) throw new IndexOutOfBoundsException("chunk not complete yet");
         final byte[] compressed = new byte[size];
         in.readBytes(compressed);
 
