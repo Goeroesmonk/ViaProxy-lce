@@ -1204,6 +1204,8 @@ public final class LceToJava {
     private ByteBuf dismountPosition;
     /** The Java client's last rotation (from its move packets). */
     float clientYaw, clientPitch;
+    /** The client's first rotation (to see whether it turned before getting its spawn position). */
+    float firstClientYaw = Float.NaN, firstClientPitch;
 
     private void trackVehicle(final int eid, final double top, final int x, final int y, final int z) {
         if (top < 0) {
@@ -1288,6 +1290,11 @@ public final class LceToJava {
     }
 
     private void releasePosition(final List<ByteBuf> out) {
+        if (!Float.isNaN(this.firstClientYaw) && (this.clientYaw != this.firstClientYaw || this.clientPitch != this.firstClientPitch)) {
+            // newer clients let you look around before the position comes: keep where you look
+            this.heldPosition.setFloat(1 + 32, this.clientYaw);
+            this.heldPosition.setFloat(1 + 36, this.clientPitch);
+        }
         if (this.debug) debugLog("Spawn position released after " + (System.currentTimeMillis() - this.heldSince) + " ms");
         out.add(this.heldPosition);
         this.heldPosition = null;

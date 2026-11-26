@@ -44,6 +44,10 @@ public final class JavaToLce {
             this.ids.clientYaw = in.getFloat(in.readerIndex() + 32);
             this.ids.clientPitch = in.getFloat(in.readerIndex() + 36);
         }
+        if ((id == 0x0C || id == 0x0D) && Float.isNaN(this.ids.firstClientYaw)) {
+            this.ids.firstClientYaw = this.ids.clientYaw;
+            this.ids.firstClientPitch = this.ids.clientPitch;
+        }
         switch (id) {
             case 0x00 -> {
                 final ByteBuf b = pkt(0x00);
