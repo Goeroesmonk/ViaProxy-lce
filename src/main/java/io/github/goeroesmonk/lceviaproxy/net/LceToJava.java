@@ -1,7 +1,7 @@
-package io.github.t9homas.lceviaproxy.net;
+package io.github.goeroesmonk.lceviaproxy.net;
 
-import io.github.t9homas.lceviaproxy.data.LceSounds;
-import io.github.t9homas.lceviaproxy.data.LceText;
+import io.github.goeroesmonk.lceviaproxy.data.LceSounds;
+import io.github.goeroesmonk.lceviaproxy.data.LceText;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 
@@ -322,7 +322,7 @@ public final class LceToJava {
                 this.spawned.add(eid);
                 final String javaName = name.length() > 16 ? name.substring(0, 16) : name;
                 if (this.skins != null) {
-                    io.github.t9homas.lceviaproxy.skin.LceSkins.register(javaName, skinId, playerIndex);
+                    io.github.goeroesmonk.lceviaproxy.skin.LceSkins.register(javaName, skinId, playerIndex);
                     this.before.add(() -> this.skins.beforeSpawn(eid, javaName));
                     this.after.add(() -> this.skins.afterSpawn(eid, javaName));
                 }

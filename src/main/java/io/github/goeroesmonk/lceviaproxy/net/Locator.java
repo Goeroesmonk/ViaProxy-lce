@@ -1,4 +1,4 @@
-package io.github.t9homas.lceviaproxy.net;
+package io.github.goeroesmonk.lceviaproxy.net;
 
 import com.viaversion.viaversion.api.connection.UserConnection;
 import com.viaversion.viaversion.api.protocol.packet.PacketWrapper;
@@ -34,7 +34,7 @@ public final class Locator {
 
         Waypoint(final String name, final int x, final int y, final int z) {
             // the UUID of the player's list entry, so mods that draw heads on the locator bar find the skin
-            this.uuid = io.github.t9homas.lceviaproxy.skin.LceSkins.javaUuid(name);
+            this.uuid = io.github.goeroesmonk.lceviaproxy.skin.LceSkins.javaUuid(name);
             this.rgb = colorOf(name);
             this.x = x;
             this.y = y;

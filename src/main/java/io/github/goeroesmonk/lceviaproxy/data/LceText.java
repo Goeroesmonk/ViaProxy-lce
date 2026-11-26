@@ -1,4 +1,4 @@
-package io.github.t9homas.lceviaproxy.data;
+package io.github.goeroesmonk.lceviaproxy.data;
 
 import java.util.List;
 

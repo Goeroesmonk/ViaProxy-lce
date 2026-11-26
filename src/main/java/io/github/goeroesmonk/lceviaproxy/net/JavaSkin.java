@@ -1,4 +1,4 @@
-package io.github.t9homas.lceviaproxy.net;
+package io.github.goeroesmonk.lceviaproxy.net;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;

@@ -1,6 +1,6 @@
-package io.github.t9homas.lceviaproxy.net;
+package io.github.goeroesmonk.lceviaproxy.net;
 
-import io.github.t9homas.lceviaproxy.LceConfig;
+import io.github.goeroesmonk.lceviaproxy.LceConfig;
 import com.viaversion.viaversion.api.connection.UserConnection;
 import com.viaversion.viaversion.api.minecraft.GameProfile;
 import net.raphimc.vialegacy.protocol.release.r1_7_6_10tor1_8.Protocolr1_7_6_10Tor1_8;
@@ -70,8 +70,8 @@ public final class LceCodec extends ChannelDuplexHandler {
         if (this.config.locatorBar()) this.toJava.locator = new Locator(ctx.channel(), this.config.debug());
         if (this.config.lceSkins()) this.toJava.skins = new PlayerSkins(ctx.channel(), this.config.debug());
         if (this.config.worldBorder()) this.toJava.edge = new WorldEdge(ctx.channel(), ctx.alloc(), this.config.debug());
-        if (this.config.joinLeaveMessages() && io.github.t9homas.lceviaproxy.LcePlugin.messages() != null) {
-            this.toJava.presence = new Presence(io.github.t9homas.lceviaproxy.LcePlugin.messages());
+        if (this.config.joinLeaveMessages() && io.github.goeroesmonk.lceviaproxy.LcePlugin.messages() != null) {
+            this.toJava.presence = new Presence(io.github.goeroesmonk.lceviaproxy.LcePlugin.messages());
         }
         this.toLce = new JavaToLce(ctx.alloc(), this.toJava);
     }
@@ -269,7 +269,7 @@ public final class LceCodec extends ChannelDuplexHandler {
             }
             case 0xFF -> {
                 final int reason = this.stream.readInt();
-                final String text = io.github.t9homas.lceviaproxy.data.LceText.disconnect(reason);
+                final String text = io.github.goeroesmonk.lceviaproxy.data.LceText.disconnect(reason);
                 if (this.state == State.PING) {
                     answerPing(ctx, "§c" + text, 0);
                 } else {
@@ -633,7 +633,7 @@ public final class LceCodec extends ChannelDuplexHandler {
     private void writeGoodbye(final ChannelHandlerContext ctx, final ByteBuf out) {
         if (this.goodbyeSent || this.state != State.PLAY || !this.config.goodbyeMessage()) return;
         this.goodbyeSent = true;
-        final io.github.t9homas.lceviaproxy.LceMessages messages = io.github.t9homas.lceviaproxy.LcePlugin.messages();
+        final io.github.goeroesmonk.lceviaproxy.LceMessages messages = io.github.goeroesmonk.lceviaproxy.LcePlugin.messages();
         final String text = messages == null ? "" : messages.get("goodbye", this.userName);
         if (text.isEmpty()) return;
         final ByteBuf chat = this.toLce.chat(text);

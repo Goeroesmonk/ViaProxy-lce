@@ -1,6 +1,6 @@
-package io.github.t9homas.lceviaproxy.net;
+package io.github.goeroesmonk.lceviaproxy.net;
 
-import io.github.t9homas.lceviaproxy.LceMessages;
+import io.github.goeroesmonk.lceviaproxy.LceMessages;
 
 import java.util.HashMap;
 import java.util.Iterator;

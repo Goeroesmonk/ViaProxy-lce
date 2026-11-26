@@ -1,11 +1,11 @@
-package io.github.t9homas.lceviaproxy.net;
+package io.github.goeroesmonk.lceviaproxy.net;
 
 import com.viaversion.viaversion.api.connection.UserConnection;
 import com.viaversion.viaversion.api.minecraft.GameProfile;
 import com.viaversion.viaversion.api.protocol.packet.PacketWrapper;
 import com.viaversion.viaversion.api.type.Types;
 import com.viaversion.viaversion.protocols.v1_8to1_9.packet.ClientboundPackets1_8;
-import io.github.t9homas.lceviaproxy.skin.LceSkins;
+import io.github.goeroesmonk.lceviaproxy.skin.LceSkins;
 import io.netty.channel.Channel;
 import net.raphimc.vialegacy.protocol.release.r1_7_6_10tor1_8.Protocolr1_7_6_10Tor1_8;
 import net.raphimc.viaproxy.proxy.session.ProxyConnection;

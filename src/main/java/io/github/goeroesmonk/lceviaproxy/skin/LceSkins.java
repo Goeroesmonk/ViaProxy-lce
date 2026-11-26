@@ -1,4 +1,4 @@
-package io.github.t9homas.lceviaproxy.skin;
+package io.github.goeroesmonk.lceviaproxy.skin;
 
 import com.viaversion.viaversion.api.Via;
 import com.viaversion.viaversion.api.minecraft.GameProfile;

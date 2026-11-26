@@ -1,6 +1,6 @@
-package io.github.t9homas.lceviaproxy;
+package io.github.goeroesmonk.lceviaproxy;
 
-import io.github.t9homas.lceviaproxy.net.LceCodec;
+import io.github.goeroesmonk.lceviaproxy.net.LceCodec;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelPipeline;
 import io.netty.util.AttributeKey;
@@ -79,8 +79,8 @@ public class LcePlugin extends ViaProxyPlugin {
             c2p.attr(LCE_TARGET).set(Boolean.TRUE);
         }
         event.setServerVersion(LceVersions.baseVersion());
-        if (config.lceSkins()) io.github.t9homas.lceviaproxy.skin.LceSkins.install();
-        io.github.t9homas.lceviaproxy.net.DelayedBlockAck.install();
+        if (config.lceSkins()) io.github.goeroesmonk.lceviaproxy.skin.LceSkins.install();
+        io.github.goeroesmonk.lceviaproxy.net.DelayedBlockAck.install();
         Logger.LOGGER.info("Connecting to LCE Revelations server " + address);
     }
 

@@ -1,4 +1,4 @@
-package io.github.t9homas.lceviaproxy;
+package io.github.goeroesmonk.lceviaproxy;
 
 import net.raphimc.viaproxy.util.logging.Logger;
 

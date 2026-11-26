@@ -1,4 +1,4 @@
-package io.github.t9homas.lceviaproxy.net;
+package io.github.goeroesmonk.lceviaproxy.net;
 
 import io.netty.buffer.ByteBuf;
 

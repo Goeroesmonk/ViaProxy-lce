@@ -1,4 +1,4 @@
-package io.github.t9homas.lceviaproxy;
+package io.github.goeroesmonk.lceviaproxy;
 
 import com.viaversion.viaversion.api.protocol.version.ProtocolVersion;
 import com.viaversion.viaversion.api.protocol.version.VersionType;
