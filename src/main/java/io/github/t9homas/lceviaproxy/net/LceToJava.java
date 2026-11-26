@@ -38,6 +38,8 @@ public final class LceToJava {
     /** Server entity ids that were spawned and not removed (to repair 11 bit ids). */
     private final java.util.Set<Integer> spawned = new java.util.HashSet<>();
     private final java.util.Set<Integer> bats = new java.util.HashSet<>();
+    /** Locator bar for 1.21.6+ clients, null when off. */
+    Locator locator;
 
     private static final int BAT = 65;
 
@@ -192,6 +194,7 @@ public final class LceToJava {
                 this.rotations.clear();
                 this.spawned.clear();
                 this.bats.clear();
+                if (this.locator != null) this.locator.clear();
                 if (newEid > 0) {
                     if (this.debug && newEid != this.serverEntityId) {
                         debugLog("Respawn: server entity id " + this.serverEntityId + " -> " + newEid + " (client keeps " + this.playerEntityId + ")");
@@ -233,6 +236,7 @@ public final class LceToJava {
                 }
                 this.rotations.put(eid, new byte[]{yaw, pitch});
                 this.spawned.add(eid);
+                if (this.locator != null) this.locator.add(eid, name, x, y, z);
                 final ByteBuf b = pkt(0x14);
                 b.writeInt(eid(eid));
                 Types.writeString(b, name.length() > 16 ? name.substring(0, 16) : name);
@@ -354,6 +358,7 @@ public final class LceToJava {
                     b.writeInt(eid(e));
                     this.rotations.remove(e);
                     this.spawned.remove(e);
+                    if (this.locator != null) this.locator.remove(e);
                     this.bats.remove(e);
                 }
                 out.add(b);
@@ -376,6 +381,7 @@ public final class LceToJava {
                 final byte yaw = in.readByte(), pitch = in.readByte();
                 this.rotations.put(eid, new byte[]{yaw, pitch});
                 this.spawned.add(eid);
+                if (this.locator != null) this.locator.teleport(eid, x, y, z);
                 final ByteBuf b = pkt(0x22);
                 b.writeInt(eid(eid));
                 b.writeInt(x);
@@ -821,12 +827,13 @@ public final class LceToJava {
      * valid next packet.
      */
     private boolean isBrokenVelocity(final int idAndFlag, final ByteBuf in) {
-        final boolean fullKnown = this.spawned.contains(idAndFlag);
-        final boolean smallKnown = this.spawned.contains(idAndFlag & 0x7FF);
-        if (fullKnown != smallKnown) return fullKnown;
         if (in.readableBytes() < 7) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
         final int r = in.readerIndex();
-        return !SERVER_PACKETS.get(in.getUnsignedByte(r + 3)) && SERVER_PACKETS.get(in.getUnsignedByte(r + 6));
+        final boolean smallFits = SERVER_PACKETS.get(in.getUnsignedByte(r + 3));
+        final boolean shortsFit = SERVER_PACKETS.get(in.getUnsignedByte(r + 6));
+        if (smallFits != shortsFit) return shortsFit;
+        // both readings land on a valid packet id: go by which entity exists
+        return this.spawned.contains(idAndFlag) && !this.spawned.contains(idAndFlag & 0x7FF);
     }
 
     // ------------------------------------------------------------------ entity movement (LCE rotations are relative)
@@ -838,6 +845,7 @@ public final class LceToJava {
     }
 
     private void relMove(final int eid, final byte dx, final byte dy, final byte dz, final List<ByteBuf> out) {
+        if (this.locator != null) this.locator.move(eid, dx, dy, dz);
         final ByteBuf b = pkt(0x1F);
         b.writeInt(eid(eid));
         b.writeByte(dx);
@@ -863,6 +871,7 @@ public final class LceToJava {
     }
 
     private void lookMove(final int eid, final byte dx, final byte dy, final byte dz, final byte dYaw, final byte dPitch, final List<ByteBuf> out) {
+        if (this.locator != null) this.locator.move(eid, dx, dy, dz);
         final byte[] r = rotate(eid, dYaw, dPitch);
         final ByteBuf b = pkt(0x21);
         b.writeInt(eid(eid));
