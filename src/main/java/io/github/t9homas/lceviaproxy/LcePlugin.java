@@ -72,6 +72,7 @@ public class LcePlugin extends ViaProxyPlugin {
             c2p.attr(LCE_TARGET).set(Boolean.TRUE);
         }
         event.setServerVersion(LceVersions.baseVersion());
+        if (config.lceSkins()) io.github.t9homas.lceviaproxy.skin.LceSkins.install();
         Logger.LOGGER.info("Connecting to LCE Revelations server " + address);
     }
 

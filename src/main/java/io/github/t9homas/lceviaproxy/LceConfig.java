@@ -25,6 +25,7 @@ public final class LceConfig {
              srv-lookup: follow _minecraft._tcp SRV records when no port is given (LCE clients do this too).
              skin: the skin LCE players see on you. "auto" = the Java skin of your user name (from Mojang),
                    another player's name, a path to a 64x64 / 64x32 PNG file, or "none" (server picks a default skin).
+             lce-skins: show the skins of LCE players (default and DLC skins; turns on ViaLegacy's legacy skin loading).
              locator-bar: show the other players on the locator bar of 1.21.6+ clients, colored by name.
              debug: log unknown / dropped packets.
             """;
@@ -35,6 +36,7 @@ public final class LceConfig {
     private final boolean debug;
     private final String skin;
     private final boolean locatorBar;
+    private final boolean lceSkins;
 
     public LceConfig(final File dataFolder) {
         final Properties p = new Properties();
@@ -44,6 +46,7 @@ public final class LceConfig {
         p.setProperty("debug", "false");
         p.setProperty("skin", "auto");
         p.setProperty("locator-bar", "true");
+        p.setProperty("lce-skins", "true");
 
         final File file = new File(dataFolder, "config.properties");
         if (file.isFile()) {
@@ -66,6 +69,7 @@ public final class LceConfig {
         this.debug = Boolean.parseBoolean(p.getProperty("debug", "false").trim());
         this.skin = p.getProperty("skin", "auto").trim();
         this.locatorBar = Boolean.parseBoolean(p.getProperty("locator-bar", "true").trim());
+        this.lceSkins = Boolean.parseBoolean(p.getProperty("lce-skins", "true").trim());
     }
 
     private static int parseInt(final String s, final int def) {
@@ -82,6 +86,10 @@ public final class LceConfig {
 
     public boolean srvLookup() {
         return this.srvLookup;
+    }
+
+    public boolean lceSkins() {
+        return this.lceSkins;
     }
 
     public boolean locatorBar() {

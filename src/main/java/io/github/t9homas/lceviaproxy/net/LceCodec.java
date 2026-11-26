@@ -60,6 +60,7 @@ public final class LceCodec extends ChannelDuplexHandler {
         this.stream = ctx.alloc().buffer();
         this.toJava = new LceToJava(ctx.alloc(), this.config.debug());
         if (this.config.locatorBar()) this.toJava.locator = new Locator(ctx.channel(), this.config.debug());
+        if (this.config.lceSkins()) this.toJava.skins = new PlayerSkins(ctx.channel(), this.config.debug());
         this.toLce = new JavaToLce(ctx.alloc(), this.toJava);
     }
 

@@ -23,6 +23,10 @@ Your user name is the one of your Java client (with `proxy-online-mode` off, any
 
 - Play on Revelations servers: world, entities, inventories, chat, sounds, signs, ...
 - **Your skin for LCE players:** your Java skin is sent to the server, so LCE players see it.
+- **Skins of LCE players** (1.8+ clients): the default skins and the skins of the DLC packs that come with the
+  Revelations client are shown. The plugin ships a list of their signed Mojang textures (made once with
+  [MineSkin](https://mineskin.org); the plugin itself never uploads anything). Skins from packs only the server has
+  show as Steve / Alex. Players with a custom skin (like other players using this plugin) get the Java skin of their name.
 - **Locator bar** (1.21.6+ clients): the other players show up on the locator bar, each in a color made from their name.
   It shows every player the server sends you (the same players a minimap like Xaero's shows): LCE servers send players
   within the server's view distance (up to 512 blocks), also outside your own render distance.
@@ -35,6 +39,7 @@ Your user name is the one of your Java client (with `proxy-online-mode` off, any
 | Option | Default | Meaning |
 |---|---|---|
 | `skin` | `auto` | The skin LCE players see on you. `auto` = the Java skin of your user name (looked up at Mojang), another player's name, a path to a 64x64 / 64x32 PNG, or `none`. LCE only knows 64x32 skins: the second layer is painted onto the first and slim arms are widened. |
+| `lce-skins` | `true` | Show the skins of LCE players. |
 | `locator-bar` | `true` | Show the other players on the locator bar of 1.21.6+ clients. |
 | `xuid` | `auto` | Your player id. `auto` makes a stable id from your user name. To be the same player as your LCE client, copy the value from its `uid.dat`, e.g. `0xD8A081207D94B205`. |
 | `netcode-version` | `560` | LCE network version sent at login (Revelations). Change it if the server says your client is outdated. |
@@ -43,7 +48,7 @@ Your user name is the one of your Java client (with `proxy-online-mode` off, any
 
 ## Known issues
 
-- Skins of LCE players are not shown in the Java client yet (they look like Steve / Alex). Capes neither.
+- Skin changes of LCE players show after they come back into view. Capes are not shown.
 - Revelations' optional encryption (`MC|CKey`) and identity tokens (`MC|CTChallenge`) are not supported. Servers that
   require them don't work.
 - The server sends broken packets for entities with ids above 2047 (LCE clients crash on them too). The plugin repairs

@@ -40,6 +40,11 @@ public final class LceToJava {
     private final java.util.Set<Integer> bats = new java.util.HashSet<>();
     /** Locator bar for 1.21.6+ clients, null when off. */
     Locator locator;
+    /** Skins of LCE players (see LceSkins), null when off. */
+    PlayerSkins skins;
+    /** Run before / after the translated packets went to ViaLegacy. */
+    private final java.util.ArrayDeque<Runnable> before = new java.util.ArrayDeque<>();
+    private final java.util.ArrayDeque<Runnable> after = new java.util.ArrayDeque<>();
 
     private static final int BAT = 65;
 
@@ -134,9 +139,14 @@ public final class LceToJava {
             }
         } catch (Exception | Error e) {
             for (ByteBuf b : list) b.release();
+            this.before.clear();
+            this.after.clear();
             throw e;
         }
+        Runnable r;
+        while ((r = this.before.poll()) != null) r.run();
         for (ByteBuf b : list) out.accept(b);
+        while ((r = this.after.poll()) != null) r.run();
         return true;
     }
 
@@ -195,6 +205,7 @@ public final class LceToJava {
                 this.spawned.clear();
                 this.bats.clear();
                 if (this.locator != null) this.locator.clear();
+                if (this.skins != null) this.skins.clear();
                 if (newEid > 0) {
                     if (this.debug && newEid != this.serverEntityId) {
                         debugLog("Respawn: server entity id " + this.serverEntityId + " -> " + newEid + " (client keeps " + this.playerEntityId + ")");
@@ -222,7 +233,10 @@ public final class LceToJava {
                 final int x = in.readInt(), y = in.readInt(), z = in.readInt();
                 final byte yaw = in.readByte(), pitch = in.readByte(), head = in.readByte();
                 final short item = in.readShort();
-                in.skipBytes(8 + 8 + 1 + 4 + 4 + 4); // xuids, player index, skin, cape, privileges
+                in.skipBytes(8 + 8); // xuids
+                final int playerIndex = in.readUnsignedByte();
+                final int skinId = in.readInt();
+                in.skipBytes(4 + 4); // cape, privileges
                 final ByteBuf meta = this.alloc.buffer();
                 try {
                     Types.metadataLceToJava(in, meta);
@@ -237,6 +251,12 @@ public final class LceToJava {
                 this.rotations.put(eid, new byte[]{yaw, pitch});
                 this.spawned.add(eid);
                 if (this.locator != null) this.locator.add(eid, name, x, y, z);
+                if (this.skins != null) {
+                    final String javaName = name.length() > 16 ? name.substring(0, 16) : name;
+                    io.github.t9homas.lceviaproxy.skin.LceSkins.register(javaName, skinId, playerIndex);
+                    this.before.add(() -> this.skins.beforeSpawn(eid, javaName));
+                    this.after.add(() -> this.skins.afterSpawn(eid, javaName));
+                }
                 final ByteBuf b = pkt(0x14);
                 b.writeInt(eid(eid));
                 Types.writeString(b, name.length() > 16 ? name.substring(0, 16) : name);
@@ -359,6 +379,7 @@ public final class LceToJava {
                     this.rotations.remove(e);
                     this.spawned.remove(e);
                     if (this.locator != null) this.locator.remove(e);
+                    if (this.skins != null) this.skins.remove(e);
                     this.bats.remove(e);
                 }
                 out.add(b);
