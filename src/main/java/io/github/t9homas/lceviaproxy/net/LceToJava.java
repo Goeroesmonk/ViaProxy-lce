@@ -140,6 +140,18 @@ public final class LceToJava {
     /**
      * @return false if the packet id is unknown (stream can't continue)
      */
+    /** Frees the buffers kept between packets (the connection closed). */
+    void release() {
+        if (this.spawnPosition != null) {
+            this.spawnPosition.release();
+            this.spawnPosition = null;
+        }
+        if (this.dismountPosition != null) {
+            this.dismountPosition.release();
+            this.dismountPosition = null;
+        }
+    }
+
     public boolean translate(final int id, final ByteBuf in, final Consumer<ByteBuf> out) throws Exception {
         final List<ByteBuf> list = new ArrayList<>(2);
         try {
@@ -154,11 +166,7 @@ public final class LceToJava {
             throw e;
         }
         if (this.spawnPosition != null && System.currentTimeMillis() - this.spawnAt > SPAWN_CHECK_MS) checkSpawn(list, true);
-        if (this.presence != null && this.playerEntityId != -1) {
-            final List<String> lines = new ArrayList<>(0);
-            this.presence.tick(lines);
-            for (String line : lines) list.add(chat(line));
-        }
+        if (this.presence != null && this.playerEntityId != -1) this.presence.tick(line -> list.add(chat(line)));
         Runnable r;
         while ((r = this.before.poll()) != null) r.run();
         for (ByteBuf b : list) out.accept(b);
@@ -1388,6 +1396,16 @@ public final class LceToJava {
         if (this.edge != null && this.edge.drawsSea(this.dimension, x >> 4, z >> 4)) {
             return; // outside the world: the plugin shows the sea there
         }
+        // all bytes are read: from here an IndexOutOfBounds is broken data, not a packet that is not complete yet
+        try {
+            convertRegion(x, y, z, xs, ys, zs, full, size, compressed, out);
+        } catch (IndexOutOfBoundsException e) {
+            throw new IllegalStateException("broken chunk data: " + e, e);
+        }
+    }
+
+    private void convertRegion(final int x, final int y, final int z, final int xs, final int ys, final int zs, final boolean full,
+                               final int size, final byte[] compressed, final List<ByteBuf> out) throws Exception {
         final byte[] data = size == 0 ? new byte[0] : ChunkConverter.decompress(compressed);
         if (full) {
             out.add(ChunkConverter.fullChunk(this.alloc, x >> 4, z >> 4, ys, data, this.dimension == 0));

@@ -4,7 +4,6 @@ import io.github.t9homas.lceviaproxy.LceMessages;
 
 import java.util.HashMap;
 import java.util.Iterator;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -65,7 +64,7 @@ final class Presence {
     }
 
     /** Called with every server packet: the messages to show now. */
-    void tick(final List<String> out) {
+    void tick(final java.util.function.Consumer<String> out) {
         if (this.players.isEmpty()) return;
         final long now = System.currentTimeMillis();
         for (Iterator<Player> it = this.players.values().iterator(); it.hasNext(); ) {
@@ -83,8 +82,8 @@ final class Presence {
         }
     }
 
-    private static void add(final List<String> out, final String message) {
-        if (!message.isEmpty()) out.add(message);
+    private static void add(final java.util.function.Consumer<String> out, final String message) {
+        if (!message.isEmpty()) out.accept(message);
     }
 
 }

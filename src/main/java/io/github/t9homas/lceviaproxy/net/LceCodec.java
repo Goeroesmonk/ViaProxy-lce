@@ -54,6 +54,7 @@ public final class LceCodec extends ChannelDuplexHandler {
     private static final int HISTORY = 32;
     private final int[] historyIds = new int[HISTORY];
     private final byte[][] historyBytes = new byte[HISTORY][];
+    private final int[] historyLens = new int[HISTORY];
     private int historyPos;
 
     public LceCodec(final LceConfig config) {
@@ -95,6 +96,7 @@ public final class LceCodec extends ChannelDuplexHandler {
             this.stream.release();
             this.stream = null;
         }
+        if (this.toJava != null) this.toJava.release();
     }
 
     // ================================================================== server -> proxy
@@ -168,11 +170,12 @@ public final class LceCodec extends ChannelDuplexHandler {
     }
 
     private void remember(final int id, final int start) {
-        final int len = Math.min(this.stream.readerIndex() - start, 96);
-        final byte[] b = new byte[Math.max(len, 0)];
-        this.stream.getBytes(start, b);
+        final int len = Math.max(Math.min(this.stream.readerIndex() - start, 96), 0);
+        byte[] b = this.historyBytes[this.historyPos];
+        if (b == null) b = this.historyBytes[this.historyPos] = new byte[96]; // reused: no allocation per packet
+        this.stream.getBytes(start, b, 0, len);
         this.historyIds[this.historyPos] = id;
-        this.historyBytes[this.historyPos] = b;
+        this.historyLens[this.historyPos] = len;
         this.historyPos = (this.historyPos + 1) % HISTORY;
     }
 
@@ -181,7 +184,7 @@ public final class LceCodec extends ChannelDuplexHandler {
         for (int i = 0; i < HISTORY; i++) {
             final int k = (this.historyPos + i) % HISTORY;
             if (this.historyBytes[k] == null) continue;
-            sb.append("\n  0x").append(Integer.toHexString(this.historyIds[k])).append(": ").append(ByteBufUtil.hexDump(this.historyBytes[k]));
+            sb.append("\n  0x").append(Integer.toHexString(this.historyIds[k])).append(": ").append(ByteBufUtil.hexDump(this.historyBytes[k], 0, this.historyLens[k]));
         }
         final int r = this.stream.readerIndex() - 1;
         final int n = Math.min(this.stream.writerIndex() - r, 96);

@@ -48,27 +48,27 @@ public final class ChunkConverter {
             inflater.end();
         }
         final byte[] in = rle.toByteArray();
-        final ByteArrayOutputStream out = new ByteArrayOutputStream(in.length * 3);
+        // RLE: 255, n < 3 -> n+1 times 255; 255, n, b -> n+1 times b
+        byte[] out = new byte[Math.max(in.length * 3, 1024)];
+        int o = 0;
         int i = 0;
         while (i < in.length) {
             final int b = in[i++] & 0xFF;
+            int count = 0;
+            int value = b;
             if (b == 255) {
-                int count = in[i++] & 0xFF;
-                if (count < 3) {
-                    for (int k = 0; k <= count; k++) {
-                        out.write(255);
-                    }
-                } else {
-                    final int data = in[i++] & 0xFF;
-                    for (int k = 0; k <= count; k++) {
-                        out.write(data);
-                    }
+                if (i >= in.length) throw new DataFormatException("chunk RLE data ends early");
+                count = in[i++] & 0xFF;
+                if (count >= 3) {
+                    if (i >= in.length) throw new DataFormatException("chunk RLE data ends early");
+                    value = in[i++] & 0xFF;
                 }
-            } else {
-                out.write(b);
             }
+            if (o + count + 1 > out.length) out = java.util.Arrays.copyOf(out, Math.max(out.length * 2, o + count + 1));
+            java.util.Arrays.fill(out, o, o + count + 1, (byte) value);
+            o += count + 1;
         }
-        return out.toByteArray();
+        return java.util.Arrays.copyOf(out, o);
     }
 
     // ------------------------------------------------------------------ full chunk
@@ -181,8 +181,10 @@ public final class ChunkConverter {
     /**
      * 1.6.4 chunk unload (empty ground-up chunk).
      */
+    private static final byte[] EMPTY_DEFLATED = deflate(new byte[0]);
+
     public static ByteBuf unloadChunk(final ByteBufAllocator alloc, final int chunkX, final int chunkZ) {
-        final byte[] deflated = deflate(new byte[0]);
+        final byte[] deflated = EMPTY_DEFLATED;
         final ByteBuf out = alloc.buffer(32);
         out.writeByte(0x33);
         out.writeInt(chunkX);
@@ -281,12 +283,15 @@ public final class ChunkConverter {
 
     // ------------------------------------------------------------------ util
 
+    /**
+     * zlib without compression: the data only goes to ViaLegacy in the same process, which unpacks it right away.
+     */
     public static byte[] deflate(final byte[] raw) {
-        final Deflater deflater = new Deflater(Deflater.DEFAULT_COMPRESSION);
+        final Deflater deflater = new Deflater(Deflater.NO_COMPRESSION);
         try {
             deflater.setInput(raw);
             deflater.finish();
-            final ByteArrayOutputStream out = new ByteArrayOutputStream(raw.length / 4 + 64);
+            final ByteArrayOutputStream out = new ByteArrayOutputStream(raw.length + raw.length / 1000 * 5 + 64);
             final byte[] tmp = new byte[16384];
             while (!deflater.finished()) {
                 final int n = deflater.deflate(tmp);
