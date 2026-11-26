@@ -242,6 +242,7 @@ public final class LceToJava {
                 if (this.edge != null) this.edge.respawn();
                 this.rotations.clear();
                 this.spawned.clear();
+                this.lastMoved.clear();
                 this.bats.clear();
                 this.vehiclePos.clear();
                 this.vehicleTop.clear();
@@ -320,6 +321,7 @@ public final class LceToJava {
                 }
                 this.rotations.put(eid, new byte[]{yaw, pitch});
                 this.spawned.add(eid);
+                this.lastMoved.put(eid, ++this.moveCounter); // a new player / mob: counts as moved
                 final String javaName = name.length() > 16 ? name.substring(0, 16) : name;
                 if (this.skins != null) {
                     io.github.goeroesmonk.lceviaproxy.skin.LceSkins.register(javaName, skinId, playerIndex);
@@ -394,6 +396,7 @@ public final class LceToJava {
                 }
                 this.rotations.put(eid, new byte[]{yaw, pitch});
                 this.spawned.add(eid);
+                this.lastMoved.put(eid, ++this.moveCounter); // a new player / mob: counts as moved
                 if (type == BAT) this.bats.add(eid);
                 else this.bats.remove(eid);
                 trackVehicle(eid, type == 90 ? 0.9 : type == 100 ? 1.6 : -1, x, y, z); // pig / horse
@@ -461,6 +464,7 @@ public final class LceToJava {
                     b.writeInt(eid(e));
                     this.rotations.remove(e);
                     this.spawned.remove(e);
+                    this.lastMoved.remove(e);
                     if (this.locator != null) this.locator.remove(e);
                     if (this.skins != null) this.skins.remove(e);
                     this.bats.remove(e);
@@ -469,21 +473,29 @@ public final class LceToJava {
                 out.add(b);
             }
             case 0x1E -> entityOnly(in.readShort() & 0xFFFF, out);
-            case 0x1F -> relMove(in.readShort() & 0xFFFF, in.readByte(), in.readByte(), in.readByte(), out);
+            case 0x1F -> {
+                final int eid = in.readShort() & 0xFFFF;
+                final byte dx = in.readByte(), dy = in.readByte(), dz = in.readByte();
+                this.lastMoved.put(eid, ++this.moveCounter);
+                relMove(eid, dx, dy, dz, out);
+            }
             case 0x20 -> {
                 final int eid = in.readShort() & 0xFFFF;
                 final byte dy = in.readByte(), dp = in.readByte();
+                this.lastMoved.put(eid, ++this.moveCounter);
                 look(eid, dy, dp, out);
             }
             case 0x21 -> {
                 final int eid = in.readShort() & 0xFFFF;
                 final byte dx = in.readByte(), dyy = in.readByte(), dz = in.readByte(), dy = in.readByte(), dp = in.readByte();
+                this.lastMoved.put(eid, ++this.moveCounter);
                 lookMove(eid, dx, dyy, dz, dy, dp, out);
             }
             case 0x22 -> { // teleport
                 final int eid = in.readShort() & 0xFFFF;
                 final int x = in.readInt(), y = in.readInt(), z = in.readInt();
                 final byte yaw = in.readByte(), pitch = in.readByte();
+                this.lastMoved.put(eid, ++this.moveCounter);
                 this.rotations.put(eid, new byte[]{yaw, pitch});
                 this.spawned.add(eid);
                 if (this.locator != null) this.locator.teleport(eid, x, y, z);
@@ -963,13 +975,25 @@ public final class LceToJava {
 
     private int smallId(final int packed) {
         final int id = packed & 0x7FF;
-        if (known(id)) return id;
-        for (int high = 1; high < 32; high++) {
+        // several entities can share the low 11 bits: take the one that moved last (with a full id packet);
+        // the others are often entities that never move (item frames, paintings, ...)
+        int best = -1;
+        long bestMove = -1;
+        for (int high = 0; high < 32; high++) {
             final int full = id | (high << 11);
-            if (known(full)) return full;
+            if (!known(full)) continue;
+            final long moved = this.lastMoved.getOrDefault(full, 0L);
+            if (best < 0 || moved > bestMove) {
+                best = full;
+                bestMove = moved;
+            }
         }
-        return id;
+        return best < 0 ? id : best;
     }
+
+    /** Entity id -> number of the last move packet with its full id (higher = later). */
+    private final Map<Integer, Long> lastMoved = new HashMap<>();
+    private long moveCounter;
 
     /**
      * A velocity packet with the 0x800 flag is either a small one (3 bytes follow) or one for an entity id >= 2048, where
