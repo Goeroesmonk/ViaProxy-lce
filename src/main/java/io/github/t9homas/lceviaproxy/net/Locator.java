@@ -33,8 +33,8 @@ public final class Locator {
         boolean sent;
 
         Waypoint(final String name, final int x, final int y, final int z) {
-            // same UUID ViaLegacy gives the player
-            this.uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + name).getBytes(StandardCharsets.UTF_8));
+            // the UUID of the player's list entry, so mods that draw heads on the locator bar find the skin
+            this.uuid = io.github.t9homas.lceviaproxy.skin.LceSkins.javaUuid(name);
             this.rgb = colorOf(name);
             this.x = x;
             this.y = y;

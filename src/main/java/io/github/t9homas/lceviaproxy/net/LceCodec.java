@@ -296,6 +296,7 @@ public final class LceCodec extends ChannelDuplexHandler {
     private void onSkin(final ChannelHandlerContext ctx, final JavaSkin.Skin skin) {
         if (skin == null || this.state == State.CLOSED || !ctx.channel().isActive()) return;
         this.skin = skin;
+        if (skin.texture() != null && this.toJava.skins != null) this.toJava.skins.selfTexture(skin.texture()[0], skin.texture()[1]);
         Logger.LOGGER.info("LCE: sending your skin to the server as " + skin.path() + " (" + skin.png().length + " bytes)");
         if (this.state == State.PLAY) announceSkin(ctx);
         // HANDSHAKE / PRE_LOGIN: the login packet carries it; LOGIN: announced when the login finishes

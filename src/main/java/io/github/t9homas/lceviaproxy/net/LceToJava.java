@@ -286,12 +286,12 @@ public final class LceToJava {
                 this.rotations.put(eid, new byte[]{yaw, pitch});
                 this.spawned.add(eid);
                 final String javaName = name.length() > 16 ? name.substring(0, 16) : name;
-                if (this.locator != null) this.locator.add(eid, javaName, x, y, z);
                 if (this.skins != null) {
                     io.github.t9homas.lceviaproxy.skin.LceSkins.register(javaName, skinId, playerIndex);
                     this.before.add(() -> this.skins.beforeSpawn(eid, javaName));
                     this.after.add(() -> this.skins.afterSpawn(eid, javaName));
                 }
+                if (this.locator != null) this.locator.add(eid, javaName, x, y, z); // after register: same UUID as the list entry
                 final ByteBuf b = pkt(0x14);
                 b.writeInt(eid(eid));
                 Types.writeString(b, javaName);

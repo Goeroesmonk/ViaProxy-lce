@@ -59,14 +59,28 @@ final class PlayerSkins {
         }, READD_DELAY_MS, TimeUnit.MILLISECONDS);
     }
 
+    /** Our own Java skin (signed Mojang textures), or null. */
+    private GameProfile.Property selfTexture;
+    private Entry selfEntry;
+
     /** Our own entry (ViaLegacy removes it too), after login and respawn. */
     void self(final String name) {
         this.channel.eventLoop().schedule(() -> {
             final ProxyConnection proxy = ProxyConnection.fromChannel(this.channel);
             final UserConnection user = proxy == null ? null : proxy.getUserConnection();
             if (!this.channel.isActive() || user == null || user.getProtocolInfo().getUuid() == null) return;
-            send(new Entry(name, user.getProtocolInfo().getUuid()), true);
+            this.selfEntry = new Entry(name, user.getProtocolInfo().getUuid());
+            send(this.selfEntry, true);
         }, READD_DELAY_MS, TimeUnit.MILLISECONDS);
+    }
+
+    /** Our skin arrived (it is looked up while logging in): show it on our own player too. */
+    void selfTexture(final String value, final String signature) {
+        this.selfTexture = new GameProfile.Property("textures", value, signature);
+        if (this.selfEntry != null) {
+            send(this.selfEntry, false); // newer clients keep the first entry: replace it
+            send(this.selfEntry, true);
+        }
     }
 
     void remove(final int eid) {
@@ -89,7 +103,8 @@ final class PlayerSkins {
             p.write(Types.VAR_INT, 1);
             p.write(Types.UUID, e.uuid);
             if (add) {
-                final GameProfile.Property[] properties = LceSkins.properties(e.name, e.uuid);
+                final GameProfile.Property[] properties = e == this.selfEntry && this.selfTexture != null
+                        ? new GameProfile.Property[]{this.selfTexture} : LceSkins.properties(e.name, e.uuid);
                 p.write(Types.STRING, e.name);
                 p.write(Types.PROFILE_PROPERTY_ARRAY, properties);
                 p.write(Types.VAR_INT, 0); // game mode

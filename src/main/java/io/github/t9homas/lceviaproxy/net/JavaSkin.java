@@ -33,7 +33,13 @@ public final class JavaSkin {
             .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
 
-    public record Skin(byte[] png, int skinId, String path) {
+    /**
+     * @param texture the signed Mojang textures (value, signature) for our own player list entry, or null (PNG file)
+     */
+    public record Skin(byte[] png, int skinId, String path, String[] texture) {
+    }
+
+    private record Mojang(JsonObject skin, String value, String signature) {
     }
 
     private JavaSkin() {
@@ -51,12 +57,14 @@ public final class JavaSkin {
             try {
                 final BufferedImage image;
                 boolean slim = false;
+                String[] texture = null;
                 final File file = new File(setting);
                 if (setting.toLowerCase().endsWith(".png") && file.isFile()) {
                     image = ImageIO.read(file);
                 } else {
                     final String name = setting.equalsIgnoreCase("auto") || setting.isEmpty() ? userName : setting;
-                    final JsonObject skin = mojangSkin(name);
+                    final Mojang mojang = mojangSkin(name);
+                    final JsonObject skin = mojang == null ? null : mojang.skin;
                     if (skin == null) {
                         Logger.LOGGER.info("LCE: no Java skin found for " + name + ", the server picks a default skin");
                         return null;
@@ -64,6 +72,7 @@ public final class JavaSkin {
                     slim = skin.has("metadata") && skin.getAsJsonObject("metadata").has("model")
                             && "slim".equals(skin.getAsJsonObject("metadata").get("model").getAsString());
                     image = ImageIO.read(new ByteArrayInputStream(get(skin.get("url").getAsString())));
+                    if (mojang.signature != null) texture = new String[]{mojang.value, mojang.signature};
                 }
                 if (image == null || image.getWidth() != 64 || (image.getHeight() != 64 && image.getHeight() != 32)) {
                     Logger.LOGGER.warn("LCE: skin is not a 64x64 or 64x32 image, not sending it");
@@ -78,7 +87,7 @@ public final class JavaSkin {
                 // a changed skin gets a new name. "ugcskin" ids live in bits 5..30.
                 int id = java.util.Arrays.hashCode(png) & 0x7FFFFFE0;
                 if (id == 0) id = 0x20;
-                return new Skin(png, id, String.format("ugcskin%08X.png", id));
+                return new Skin(png, id, String.format("ugcskin%08X.png", id), texture);
             } catch (Exception e) {
                 Logger.LOGGER.warn("LCE: could not load the Java skin: " + e);
                 return null;
@@ -86,18 +95,20 @@ public final class JavaSkin {
         });
     }
 
-    private static JsonObject mojangSkin(final String name) throws Exception {
+    private static Mojang mojangSkin(final String name) throws Exception {
         final byte[] profile = get("https://api.mojang.com/users/profiles/minecraft/" + URLEncoder.encode(name, StandardCharsets.UTF_8));
         if (profile == null) return null;
         final String uuid = JsonParser.parseString(new String(profile, StandardCharsets.UTF_8)).getAsJsonObject().get("id").getAsString();
-        final byte[] session = get("https://sessionserver.mojang.com/session/minecraft/profile/" + uuid);
+        final byte[] session = get("https://sessionserver.mojang.com/session/minecraft/profile/" + uuid + "?unsigned=false");
         if (session == null) return null;
         for (var property : JsonParser.parseString(new String(session, StandardCharsets.UTF_8)).getAsJsonObject().getAsJsonArray("properties")) {
             final JsonObject p = property.getAsJsonObject();
             if (!"textures".equals(p.get("name").getAsString())) continue;
             final JsonObject textures = JsonParser.parseString(new String(Base64.getDecoder().decode(p.get("value").getAsString()), StandardCharsets.UTF_8))
                     .getAsJsonObject().getAsJsonObject("textures");
-            return textures != null && textures.has("SKIN") ? textures.getAsJsonObject("SKIN") : null;
+            if (textures == null || !textures.has("SKIN")) return null;
+            return new Mojang(textures.getAsJsonObject("SKIN"), p.get("value").getAsString(),
+                    p.has("signature") ? p.get("signature").getAsString() : null);
         }
         return null;
     }
