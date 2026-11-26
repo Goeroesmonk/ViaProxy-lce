@@ -4,34 +4,35 @@ import net.raphimc.viaproxy.util.logging.Logger;
 
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.nio.file.Files;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Properties;
 
 /**
- * plugins/LCERevelations/config.properties
+ * plugins/LCERevelations/config.yml (an old config.properties is taken over and renamed to config.properties.old).
  */
 public final class LceConfig {
 
-    private static final String HEADER = """
-             LCE Revelations plugin for ViaProxy
-
-             netcode-version: LCE network version sent in the PreLogin packet (Revelations = 560).
-             xuid: your player id. "auto" makes a stable one from your user name.
-                   To use the same id as your LCE client, copy the value from its uid.dat (for example 0xD8A081207D94B205).
-             srv-lookup: follow _minecraft._tcp SRV records when no port is given (LCE clients do this too).
-             skin: the skin LCE players see on you. "auto" = the Java skin of your user name (from Mojang),
-                   another player's name, a path to a 64x64 / 64x32 PNG file, or "none" (server picks a default skin).
-             lce-skins: show the skins of LCE players (default and DLC skins, from a list built into the plugin).
-             join-leave-messages: show "... joined / left the game" (the plugin makes them; texts in messages.yml).
-             goodbye-message: send a chat message (messages.yml: goodbye) to the server when you leave.
-             world-border: show the edge of the LCE world as a world border, with the endless sea behind it like on LCE.
-             locator-bar: show the other players on the locator bar of 1.21.6+ clients, colored by name.
-             debug: log unknown / dropped packets.
-            """;
+    /** key, default, comment */
+    private static final String[][] OPTIONS = {
+            {"skin", "auto", "The skin LCE players see on you: auto = the Java skin of your user name (from Mojang),\n"
+                    + "another player's name, a path to a 64x64 / 64x32 PNG file, or none (the server picks a default skin;\n"
+                    + "you still see your Java skin)."},
+            {"lce-skins", "true", "Show the skins of LCE players (default and DLC skins, from a list built into the plugin)."},
+            {"locator-bar", "true", "Show the other players on the locator bar of 1.21.6+ clients, colored by name."},
+            {"world-border", "true", "Show the edge of the LCE world as a world border, with the endless sea behind it like on LCE."},
+            {"join-leave-messages", "true", "Show \"... joined / left the game\" (the plugin makes them; texts in messages.yml)."},
+            {"goodbye-message", "false", "Send a chat message (messages.yml: goodbye) to the server when you leave."},
+            {"xuid", "auto", "Your player id. auto makes a stable one from your user name. To use the same id as your LCE\n"
+                    + "client, copy the value from its uid.dat (for example 0xD8A081207D94B205)."},
+            {"netcode-version", "560", "LCE network version sent in the PreLogin packet (Revelations = 560)."},
+            {"srv-lookup", "true", "Follow _minecraft._tcp SRV records when no port is given (LCE clients do this too)."},
+            {"debug", "false", "Log every packet and the packets before a protocol error."},
+    };
 
     private final int netcodeVersion;
     private final String xuid;
@@ -45,43 +46,74 @@ public final class LceConfig {
     private final boolean goodbyeMessage;
 
     public LceConfig(final File dataFolder) {
-        final Properties p = new Properties();
-        p.setProperty("netcode-version", "560");
-        p.setProperty("xuid", "auto");
-        p.setProperty("srv-lookup", "true");
-        p.setProperty("debug", "false");
-        p.setProperty("skin", "auto");
-        p.setProperty("locator-bar", "true");
-        p.setProperty("lce-skins", "true");
-        p.setProperty("world-border", "true");
-        p.setProperty("join-leave-messages", "true");
-        p.setProperty("goodbye-message", "false");
+        final Map<String, String> v = new LinkedHashMap<>();
+        for (String[] o : OPTIONS) v.put(o[0], o[1]);
 
-        final File file = new File(dataFolder, "config.properties");
-        if (file.isFile()) {
-            try (InputStream in = new FileInputStream(file)) {
+        final File yml = new File(dataFolder, "config.yml");
+        final File old = new File(dataFolder, "config.properties");
+        if (!yml.isFile() && old.isFile()) { // take over the old config
+            final Properties p = new Properties();
+            try (InputStream in = new FileInputStream(old)) {
                 p.load(in);
+                for (String k : p.stringPropertyNames()) if (v.containsKey(k)) v.put(k, p.getProperty(k).trim());
             } catch (Exception e) {
-                Logger.LOGGER.warn("Could not read " + file + ": " + e);
+                Logger.LOGGER.warn("Could not read " + old + ": " + e);
+            }
+            if (!old.renameTo(new File(dataFolder, "config.properties.old"))) old.delete();
+        } else if (yml.isFile()) {
+            try {
+                for (String line : Files.readAllLines(yml.toPath(), StandardCharsets.UTF_8)) {
+                    line = line.strip();
+                    if (line.isEmpty() || line.startsWith("#")) continue;
+                    final int colon = line.indexOf(':');
+                    if (colon <= 0) continue;
+                    final String key = line.substring(0, colon).strip();
+                    if (v.containsKey(key)) v.put(key, unquote(line.substring(colon + 1).strip()));
+                }
+            } catch (Exception e) {
+                Logger.LOGGER.warn("Could not read " + yml + ": " + e);
             }
         }
+
+        // write it back (adds new options with their default and comment)
+        final StringBuilder out = new StringBuilder("# LCE Revelations plugin for ViaProxy. Restart ViaProxy after changing this file.\n");
+        for (String[] o : OPTIONS) {
+            out.append('\n');
+            for (String c : o[2].split("\n")) out.append("# ").append(c).append('\n');
+            out.append(o[0]).append(": ").append(quote(v.get(o[0]))).append('\n');
+        }
         dataFolder.mkdirs();
-        try (OutputStream out = new FileOutputStream(file)) {
-            p.store(out, HEADER);
+        try {
+            Files.writeString(yml.toPath(), out.toString(), StandardCharsets.UTF_8);
         } catch (Exception e) {
-            Logger.LOGGER.warn("Could not write " + file + ": " + e);
+            Logger.LOGGER.warn("Could not write " + yml + ": " + e);
         }
 
-        this.netcodeVersion = parseInt(p.getProperty("netcode-version"), 560);
-        this.xuid = p.getProperty("xuid", "auto").trim();
-        this.srvLookup = Boolean.parseBoolean(p.getProperty("srv-lookup", "true").trim());
-        this.debug = Boolean.parseBoolean(p.getProperty("debug", "false").trim());
-        this.skin = p.getProperty("skin", "auto").trim();
-        this.locatorBar = Boolean.parseBoolean(p.getProperty("locator-bar", "true").trim());
-        this.lceSkins = Boolean.parseBoolean(p.getProperty("lce-skins", "true").trim());
-        this.worldBorder = Boolean.parseBoolean(p.getProperty("world-border", "true").trim());
-        this.joinLeaveMessages = Boolean.parseBoolean(p.getProperty("join-leave-messages", "true").trim());
-        this.goodbyeMessage = Boolean.parseBoolean(p.getProperty("goodbye-message", "false").trim());
+        this.netcodeVersion = parseInt(v.get("netcode-version"), 560);
+        this.xuid = v.get("xuid");
+        this.srvLookup = Boolean.parseBoolean(v.get("srv-lookup"));
+        this.debug = Boolean.parseBoolean(v.get("debug"));
+        this.skin = v.get("skin");
+        this.locatorBar = Boolean.parseBoolean(v.get("locator-bar"));
+        this.lceSkins = Boolean.parseBoolean(v.get("lce-skins"));
+        this.worldBorder = Boolean.parseBoolean(v.get("world-border"));
+        this.joinLeaveMessages = Boolean.parseBoolean(v.get("join-leave-messages"));
+        this.goodbyeMessage = Boolean.parseBoolean(v.get("goodbye-message"));
+    }
+
+    /** YAML single quoted for text (paths keep their backslashes), plain for true / false / numbers. */
+    private static String quote(final String value) {
+        if (value.matches("true|false|-?[0-9]+|auto|none")) return value;
+        return "'" + value.replace("'", "''") + "'";
+    }
+
+    private static String unquote(String value) {
+        if (value.length() >= 2 && value.startsWith("'") && value.endsWith("'")) {
+            return value.substring(1, value.length() - 1).replace("''", "'");
+        }
+        if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) return value.substring(1, value.length() - 1);
+        final int comment = value.indexOf(" #");
+        return (comment >= 0 ? value.substring(0, comment) : value).strip();
     }
 
     private static int parseInt(final String s, final int def) {

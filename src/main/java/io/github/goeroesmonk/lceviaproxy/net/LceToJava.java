@@ -966,6 +966,10 @@ public final class LceToJava {
      * if no entity has the short id but one with the same low 11 bits exists, it is that one.
      */
     /** An entity the client has: one the server spawned, or ourselves (our id changes and grows with each respawn). */
+    private static final long VELOCITY_WAIT_MS = 150;
+    private int velocityWaitAt = -1;
+    private long velocityWaitSince;
+
     /** Entities spawned in the packets a velocity check looks ahead at. */
     private final java.util.Set<Integer> chainKnown = new java.util.HashSet<>();
 
@@ -1016,11 +1020,27 @@ public final class LceToJava {
         // both readings land on a valid packet id: does the next packet name an entity we know?
         // (the server sends metadata / moves / velocity for the same entities in a row)
         final int limit = r + 6 + 64; // both readings are scored over the same bytes
-        // decide only with the whole window there (at the end of the received data the chains are too short)
-        if (in.writerIndex() < limit) throw new IndexOutOfBoundsException("velocity: waiting for more packets");
         this.chainKnown.clear();
-        final int small = chainScore(in, r + 3, limit, 0x1C, true), shorts = chainScore(in, r + 6, limit, 0x1C, true);
-        this.chainKnown.clear();
+        int small, shorts;
+        try {
+            small = chainScore(in, r + 3, limit, 0x1C, true);
+            shorts = chainScore(in, r + 6, limit, 0x1C, true);
+        } catch (IndexOutOfBoundsException notThere) {
+            small = shorts = 0; // the next packet is not all there yet
+        } finally {
+            this.chainKnown.clear();
+        }
+        if (in.writerIndex() < limit && Math.abs(small - shorts) < 3) {
+            // not all of the window is there and it is not clear yet: wait for more data, but not long (everything
+            // after this packet waits too)
+            final long now = System.currentTimeMillis();
+            if (this.velocityWaitAt != r) {
+                this.velocityWaitAt = r;
+                this.velocityWaitSince = now;
+            }
+            if (now - this.velocityWaitSince < VELOCITY_WAIT_MS) throw new IndexOutOfBoundsException("velocity: waiting for more packets");
+        }
+        this.velocityWaitAt = -1;
         if (this.debug && shorts > small) {
             debugLog("velocity read as shorts 0x" + Integer.toHexString(idAndFlag) + ": bytes score " + small + ", shorts score " + shorts + " "
                     + io.netty.buffer.ByteBufUtil.hexDump(in, r, Math.min(in.readableBytes(), 24)));

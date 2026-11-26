@@ -368,7 +368,7 @@ public final class LceCodec extends ChannelDuplexHandler {
         return now - this.loginWaitStart < SKIN_WAIT_MS;
     }
 
-    private static final long SKIN_WAIT_MS = 3000;
+    private static final long SKIN_WAIT_MS = 2000;
     private boolean skinDone;
     /** Our signed Mojang textures (value, signature) for our own player list entry, or null. */
     private String[] selfTexture;

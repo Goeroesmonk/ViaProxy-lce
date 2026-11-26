@@ -39,7 +39,7 @@ Your user name is the one of your Java client (with `proxy-online-mode` off, any
 
 ## Config
 
-`plugins/LCERevelations/config.properties`:
+`plugins/LCERevelations/config.yml` (an old `config.properties` is taken over automatically), texts in `messages.yml`:
 
 | Option | Default | Meaning |
 |---|---|---|
