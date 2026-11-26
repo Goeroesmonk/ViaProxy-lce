@@ -151,6 +151,7 @@ public final class LceToJava {
             this.after.clear();
             throw e;
         }
+        if (this.spawnPosition != null && System.currentTimeMillis() - this.spawnAt > SPAWN_CHECK_MS) checkSpawn(list, true);
         Runnable r;
         while ((r = this.before.poll()) != null) r.run();
         for (ByteBuf b : list) out.accept(b);
@@ -221,6 +222,8 @@ public final class LceToJava {
                 in.readShort(); // xz size
                 in.readUnsignedByte(); // hell scale
                 this.dimension = dim;
+                this.expectSpawn = true;
+                this.loadedChunks.clear();
                 if (this.edge != null) this.edge.respawn();
                 this.rotations.clear();
                 this.spawned.clear();
@@ -256,6 +259,14 @@ public final class LceToJava {
                 final List<ByteBuf> one = new ArrayList<>(1);
                 copy(in, one, id, "ddddffb");
                 final ByteBuf b = one.get(0);
+                if (this.expectSpawn) {
+                    // the spawn position: comes before the chunks around it, the client may sink in a bit
+                    this.expectSpawn = false;
+                    if (this.spawnPosition != null) this.spawnPosition.release();
+                    this.spawnPosition = b.copy();
+                    this.spawnAt = System.currentTimeMillis();
+                    this.clientMoved = false;
+                }
                 if (this.riding >= 0) {
                     // getting out: the server puts us next to the vehicle (findStandUpPosition) before it tells us we
                     // stopped riding, while the client still sits in the vehicle; repeat it after the dismount
@@ -552,6 +563,7 @@ public final class LceToJava {
                 final boolean visible = in.readUnsignedByte() != 0;
                 if (!visible && (this.edge == null || !this.edge.drawsSea(this.dimension, cx, cz))) {
                     out.add(ChunkConverter.unloadChunk(this.alloc, cx, cz));
+                    this.loadedChunks.remove(chunkKey(cx, cz));
                 }
             }
             case 0x33 -> blockRegion(in, out);
@@ -1275,6 +1287,50 @@ public final class LceToJava {
 
     // ------------------------------------------------------------------ chunks
 
+    /**
+     * LCE sends the spawn position about 2 seconds before the chunks around it. The client gets it at once (holding it
+     * left newer clients at 0,0) and starts falling meanwhile: on a slab it sank into the slab. Once the chunks around
+     * the spawn are there (or after a few seconds), a client that sank below the spawn without walking away gets the
+     * spawn position again.
+     */
+    private static final long SPAWN_CHECK_MS = 5000;
+    private final java.util.Set<Long> loadedChunks = new java.util.HashSet<>();
+    private boolean expectSpawn = true;
+    private ByteBuf spawnPosition;
+    private long spawnAt;
+    /** The client's last position (from its move packets). */
+    double clientX, clientY, clientZ;
+    boolean clientMoved;
+
+    private static long chunkKey(final int cx, final int cz) {
+        return ((long) cx << 32) | (cz & 0xFFFFFFFFL);
+    }
+
+    private void checkSpawn(final List<ByteBuf> out, final boolean timeout) {
+        final ByteBuf spawn = this.spawnPosition;
+        final double x = spawn.getDouble(1), feet = spawn.getDouble(1 + 16), z = spawn.getDouble(1 + 24);
+        if (!timeout) {
+            if (System.currentTimeMillis() - this.spawnAt < 1000) return; // give the client time to fall first
+            final int cx = (int) Math.floor(x) >> 4, cz = (int) Math.floor(z) >> 4;
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    if (!this.loadedChunks.contains(chunkKey(cx + dx, cz + dz))
+                            && (this.edge == null || !this.edge.drawsSea(this.dimension, cx + dx, cz + dz))) return; // not yet
+                }
+            }
+        }
+        this.spawnPosition = null;
+        final double horizontal = (this.clientX - x) * (this.clientX - x) + (this.clientZ - z) * (this.clientZ - z);
+        if (this.clientMoved && this.clientY < feet - 0.05 && horizontal < 0.25) {
+            spawn.setFloat(1 + 32, this.clientYaw);   // keep where the player looks
+            spawn.setFloat(1 + 36, this.clientPitch);
+            out.add(spawn);
+            if (this.debug) debugLog("Spawn: client sank to y " + this.clientY + ", sent the spawn position (y " + feet + ") again");
+        } else {
+            spawn.release();
+        }
+    }
+
     private void blockRegion(final ByteBuf in, final List<ByteBuf> out) throws Exception {
         final int flags = in.readUnsignedByte();
         final int x = in.readInt();
@@ -1302,6 +1358,8 @@ public final class LceToJava {
         final byte[] data = size == 0 ? new byte[0] : ChunkConverter.decompress(compressed);
         if (full) {
             out.add(ChunkConverter.fullChunk(this.alloc, x >> 4, z >> 4, ys, data, this.dimension == 0));
+            this.loadedChunks.add(chunkKey(x >> 4, z >> 4));
+            if (this.spawnPosition != null) checkSpawn(out, false);
         } else {
             ChunkConverter.partialRegion(this.alloc, x, y, z, xs, ys, zs, data, out::add);
         }

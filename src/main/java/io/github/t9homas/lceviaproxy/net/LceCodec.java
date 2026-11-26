@@ -508,8 +508,9 @@ public final class LceCodec extends ChannelDuplexHandler {
                 }, doorTop ? DOOR_TOP_DELAY_MS : SIGN_EDITOR_DELAY_MS, TimeUnit.MILLISECONDS);
                 return;
             }
+            final boolean ackNow = this.pendingBlockAck != null && (id == 0x35 || id == 0x34) && updatesTarget(id, framed);
             ctx.fireChannelRead(framed);
-            if ((id == 0x35 || id == 0x34) && this.pendingBlockAck != null) runBlockAck(); // the update is there now
+            if (ackNow) runBlockAck(); // the update of the clicked block is there now
         } finally {
             packet.release();
         }
@@ -520,10 +521,14 @@ public final class LceCodec extends ChannelDuplexHandler {
     private Runnable pendingBlockAck;
     private ChannelHandlerContext ctx;
 
+    /** Blocks the pending confirmation waits for (x, y, z, ...), null = not known yet (any block update). */
+    private int[] ackTargets;
+
     /** Called on the event loop by {@link DelayedBlockAck}: a newer confirmation covers the older ones. */
     void queueBlockAck(final Runnable ack) {
         final boolean scheduled = this.pendingBlockAck != null;
         this.pendingBlockAck = ack;
+        this.ackTargets = null; // the client packet that caused it comes next (see handleClientPacket)
         if (!scheduled && this.ctx != null) {
             this.ctx.executor().schedule(() -> {
                 if (this.pendingBlockAck != null) runBlockAck();
@@ -534,7 +539,51 @@ public final class LceCodec extends ChannelDuplexHandler {
     private void runBlockAck() {
         final Runnable ack = this.pendingBlockAck;
         this.pendingBlockAck = null;
+        this.ackTargets = null;
         ack.run();
+    }
+
+    /** The 1.6.4 client packet that came with a confirmation: which blocks to wait for, or confirm at once. */
+    private void ackTargetsFrom(final int id, final ByteBuf p) {
+        final int r = p.readerIndex();
+        if (id == 0x0F && p.readableBytes() >= 11) { // use item (on a block)
+            final int x = p.getInt(r), y = p.getUnsignedByte(r + 4), z = p.getInt(r + 5), face = p.getUnsignedByte(r + 9);
+            if (face == 255) {
+                runBlockAck(); // eating, a bow, ...: no block change
+                return;
+            }
+            final int dx = face == 4 ? -1 : face == 5 ? 1 : 0, dy = face == 0 ? -1 : face == 1 ? 1 : 0, dz = face == 2 ? -1 : face == 3 ? 1 : 0;
+            this.ackTargets = new int[]{x, y, z, x + dx, y + dy, z + dz};
+        } else if (id == 0x0E && p.readableBytes() >= 11) { // dig
+            final int status = p.getUnsignedByte(r);
+            if (status != 0 && status != 2) {
+                runBlockAck(); // drop item, release use item, ...
+                return;
+            }
+            this.ackTargets = new int[]{p.getInt(r + 1), p.getUnsignedByte(r + 5), p.getInt(r + 6)};
+        }
+    }
+
+    /** Does this 1.6.4 block change (0x35) / multi block change (0x34) update a block the confirmation waits for? */
+    private boolean updatesTarget(final int id, final ByteBuf framed) {
+        final int[] t = this.ackTargets;
+        if (t == null) return true;
+        final ByteBuf b = framed.duplicate();
+        Types.readVarInt(b); // length
+        Types.readVarInt(b); // id
+        if (id == 0x35) {
+            final int x = b.readInt(), y = b.readUnsignedByte(), z = b.readInt();
+            for (int i = 0; i < t.length; i += 3) if (t[i] == x && t[i + 1] == y && t[i + 2] == z) return true;
+            return false;
+        }
+        final int cx = b.readInt(), cz = b.readInt(), count = b.readShort();
+        b.readInt(); // data size
+        for (int n = 0; n < count; n++) {
+            final int rec = b.readInt();
+            final int x = (cx << 4) + ((rec >>> 28) & 15), z = (cz << 4) + ((rec >>> 24) & 15), y = (rec >>> 16) & 0xFF;
+            for (int i = 0; i < t.length; i += 3) if (t[i] == x && t[i + 1] == y && t[i + 2] == z) return true;
+        }
+        return false;
     }
     private static final long SIGN_EDITOR_DELAY_MS = 200;
 
@@ -618,6 +667,7 @@ public final class LceCodec extends ChannelDuplexHandler {
             final int r = packet.readerIndex();
             this.toJava.edge.playerAt(this.toJava.dimension, packet.getDouble(r), packet.getDouble(r + 24), b -> toVia(ctx, b));
         }
+        if (this.pendingBlockAck != null && this.ackTargets == null && (id == 0x0F || id == 0x0E)) ackTargetsFrom(id, packet);
         final ByteBuf lce = this.toLce.translate(id, packet);
         if (this.config.debug() && id != 0x0A && id != 0x0B && id != 0x0C && id != 0x0D && id != 0x00) {
             Logger.LOGGER.info("[LCE] client 0x" + Integer.toHexString(id) + (lce == null ? " dropped" : " -> LCE " + ByteBufUtil.hexDump(lce, lce.readerIndex(), Math.min(lce.readableBytes(), 48))));

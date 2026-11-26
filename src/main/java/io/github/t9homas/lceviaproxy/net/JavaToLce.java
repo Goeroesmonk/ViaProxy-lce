@@ -37,6 +37,12 @@ public final class JavaToLce {
      */
     public ByteBuf translate(final int id, final ByteBuf in) {
         // remember the rotation (used when getting out of a vehicle)
+        if ((id == 0x0B || id == 0x0D) && in.readableBytes() >= 32) { // position (x, feet y, stance, z)
+            this.ids.clientX = in.getDouble(in.readerIndex());
+            this.ids.clientY = in.getDouble(in.readerIndex() + 8);
+            this.ids.clientZ = in.getDouble(in.readerIndex() + 24);
+            this.ids.clientMoved = true;
+        }
         if (id == 0x0C && in.readableBytes() >= 8) {
             this.ids.clientYaw = in.getFloat(in.readerIndex());
             this.ids.clientPitch = in.getFloat(in.readerIndex() + 4);
