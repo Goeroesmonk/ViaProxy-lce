@@ -333,7 +333,9 @@ public final class LceToJava {
                 b.writeInt(z);
                 b.writeByte(pitch);
                 b.writeByte(yaw);
-                b.writeInt(data);
+                // arrows, fishing hooks and fireballs carry their owner's entity id
+                final boolean owner = type == 60 || type == 90 || type == 63 || type == 64 || type == 66;
+                b.writeInt(owner && data > 0 ? eid(data) : data);
                 if (data > 0) {
                     b.writeShort(vx);
                     b.writeShort(vy);
