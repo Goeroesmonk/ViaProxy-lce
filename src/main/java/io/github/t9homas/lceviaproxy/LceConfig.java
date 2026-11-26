@@ -26,6 +26,8 @@ public final class LceConfig {
              skin: the skin LCE players see on you. "auto" = the Java skin of your user name (from Mojang),
                    another player's name, a path to a 64x64 / 64x32 PNG file, or "none" (server picks a default skin).
              lce-skins: show the skins of LCE players (default and DLC skins, from a list built into the plugin).
+             join-leave-messages: show "... joined / left the game" (the plugin makes them; texts in messages.yml).
+             goodbye-message: send a chat message (messages.yml: goodbye) to the server when you leave.
              world-border: show the edge of the LCE world as a world border, with the endless sea behind it like on LCE.
              locator-bar: show the other players on the locator bar of 1.21.6+ clients, colored by name.
              debug: log unknown / dropped packets.
@@ -39,6 +41,8 @@ public final class LceConfig {
     private final boolean locatorBar;
     private final boolean lceSkins;
     private final boolean worldBorder;
+    private final boolean joinLeaveMessages;
+    private final boolean goodbyeMessage;
 
     public LceConfig(final File dataFolder) {
         final Properties p = new Properties();
@@ -50,6 +54,8 @@ public final class LceConfig {
         p.setProperty("locator-bar", "true");
         p.setProperty("lce-skins", "true");
         p.setProperty("world-border", "true");
+        p.setProperty("join-leave-messages", "true");
+        p.setProperty("goodbye-message", "false");
 
         final File file = new File(dataFolder, "config.properties");
         if (file.isFile()) {
@@ -74,6 +80,8 @@ public final class LceConfig {
         this.locatorBar = Boolean.parseBoolean(p.getProperty("locator-bar", "true").trim());
         this.lceSkins = Boolean.parseBoolean(p.getProperty("lce-skins", "true").trim());
         this.worldBorder = Boolean.parseBoolean(p.getProperty("world-border", "true").trim());
+        this.joinLeaveMessages = Boolean.parseBoolean(p.getProperty("join-leave-messages", "true").trim());
+        this.goodbyeMessage = Boolean.parseBoolean(p.getProperty("goodbye-message", "false").trim());
     }
 
     private static int parseInt(final String s, final int def) {
@@ -94,6 +102,14 @@ public final class LceConfig {
 
     public boolean lceSkins() {
         return this.lceSkins;
+    }
+
+    public boolean joinLeaveMessages() {
+        return this.joinLeaveMessages;
+    }
+
+    public boolean goodbyeMessage() {
+        return this.goodbyeMessage;
     }
 
     public boolean worldBorder() {

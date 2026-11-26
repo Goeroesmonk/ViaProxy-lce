@@ -42,6 +42,8 @@ public final class LceToJava {
     Locator locator;
     /** Skins of LCE players (see LceSkins), null when off. */
     PlayerSkins skins;
+    /** Join / leave messages, null when off. */
+    Presence presence;
     /** Id of the open crafting table window, -1 if none. */
     int craftingWindow = -1;
     /** World border and the sea outside the world, null when off. */
@@ -152,6 +154,11 @@ public final class LceToJava {
             throw e;
         }
         if (this.spawnPosition != null && System.currentTimeMillis() - this.spawnAt > SPAWN_CHECK_MS) checkSpawn(list, true);
+        if (this.presence != null && this.playerEntityId != -1) {
+            final List<String> lines = new ArrayList<>(0);
+            this.presence.tick(lines);
+            for (String line : lines) list.add(chat(line));
+        }
         Runnable r;
         while ((r = this.before.poll()) != null) r.run();
         for (ByteBuf b : list) out.accept(b);
@@ -308,6 +315,7 @@ public final class LceToJava {
                     this.after.add(() -> this.skins.afterSpawn(eid, javaName));
                 }
                 if (this.locator != null) this.locator.add(eid, javaName, x, y, z); // after register: same UUID as the list entry
+                if (this.presence != null) this.presence.spawned(eid, javaName);
                 final ByteBuf b = pkt(0x14);
                 b.writeInt(eid(eid));
                 Types.writeString(b, javaName);
@@ -778,7 +786,12 @@ public final class LceToJava {
                 final int len = in.readInt();
                 if (len > 0) in.skipBytes(len);
             }
-            case 0xC9 -> in.skipBytes(1 + 2 + 4 + 4); // LCE player info (small id / colour / privileges / entity)
+            case 0xC9 -> { // LCE player info (small id / colour / privileges / entity): used for join / leave messages
+                final int smallId = in.readUnsignedByte();
+                in.skipBytes(2 + 4);
+                final int entity = in.readInt();
+                if (this.presence != null && entity != this.serverEntityId) this.presence.info(smallId, entity);
+            }
             case 0xCA -> copy(in, out, id, "bff");
             case 0xCE -> copy(in, out, id, "SSb");
             case 0xCF -> {

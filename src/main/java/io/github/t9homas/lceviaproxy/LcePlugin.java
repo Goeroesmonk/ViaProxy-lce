@@ -36,6 +36,12 @@ public class LcePlugin extends ViaProxyPlugin {
 
     private static LceConfig config;
 
+    private static LceMessages messages;
+
+    public static LceMessages messages() {
+        return messages;
+    }
+
     public static LceConfig config() {
         return config;
     }
@@ -43,6 +49,7 @@ public class LcePlugin extends ViaProxyPlugin {
     @Override
     public void onEnable() {
         config = new LceConfig(this.getDataFolder());
+        messages = new LceMessages(this.getDataFolder());
         LceVersions.register();
         ViaProxy.EVENT_MANAGER.register(this);
         Logger.LOGGER.info("LCERevelations loaded: added \"" + LceVersions.LCE_REVELATIONS.getName() + "\" server version");

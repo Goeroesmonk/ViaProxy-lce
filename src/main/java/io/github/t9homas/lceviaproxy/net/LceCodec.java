@@ -69,6 +69,9 @@ public final class LceCodec extends ChannelDuplexHandler {
         if (this.config.locatorBar()) this.toJava.locator = new Locator(ctx.channel(), this.config.debug());
         if (this.config.lceSkins()) this.toJava.skins = new PlayerSkins(ctx.channel(), this.config.debug());
         if (this.config.worldBorder()) this.toJava.edge = new WorldEdge(ctx.channel(), ctx.alloc(), this.config.debug());
+        if (this.config.joinLeaveMessages() && io.github.t9homas.lceviaproxy.LcePlugin.messages() != null) {
+            this.toJava.presence = new Presence(io.github.t9homas.lceviaproxy.LcePlugin.messages());
+        }
         this.toLce = new JavaToLce(ctx.alloc(), this.toJava);
     }
 
@@ -122,6 +125,7 @@ public final class LceCodec extends ChannelDuplexHandler {
                 final int smallId = this.net.readUnsignedByte();
                 this.gotSmallId = true;
                 if (this.config.debug()) Logger.LOGGER.info("[LCE] Assigned small id " + smallId);
+                if (this.toJava.presence != null) this.toJava.presence.selfSmallId = smallId;
             }
             while (this.net.readableBytes() >= 4) {
                 final int len = this.net.getInt(this.net.readerIndex());
@@ -615,6 +619,38 @@ public final class LceCodec extends ChannelDuplexHandler {
 
     // ================================================================== proxy -> server
 
+    // ------------------------------------------------------------------ goodbye message
+
+    private boolean goodbyeSent;
+
+    /** The goodbye chat message (config goodbye-message), once, while playing. */
+    private void writeGoodbye(final ChannelHandlerContext ctx, final ByteBuf out) {
+        if (this.goodbyeSent || this.state != State.PLAY || !this.config.goodbyeMessage()) return;
+        this.goodbyeSent = true;
+        final io.github.t9homas.lceviaproxy.LceMessages messages = io.github.t9homas.lceviaproxy.LcePlugin.messages();
+        final String text = messages == null ? "" : messages.get("goodbye", this.userName);
+        if (text.isEmpty()) return;
+        final ByteBuf chat = this.toLce.chat(text);
+        out.writeInt(chat.readableBytes());
+        out.writeBytes(chat);
+        chat.release();
+    }
+
+    @Override
+    public void close(final ChannelHandlerContext ctx, final ChannelPromise promise) throws Exception {
+        // the Java client left without a disconnect packet: say goodbye first
+        if (!this.goodbyeSent && this.state == State.PLAY && this.config.goodbyeMessage() && ctx.channel().isActive()) {
+            final ByteBuf out = ctx.alloc().buffer();
+            writeGoodbye(ctx, out);
+            if (out.isReadable()) {
+                ctx.writeAndFlush(out).addListener(f -> ctx.close(promise));
+                return;
+            }
+            out.release();
+        }
+        super.close(ctx, promise);
+    }
+
     @Override
     public void write(final ChannelHandlerContext ctx, final Object msg, final ChannelPromise promise) throws Exception {
         if (!(msg instanceof ByteBuf buf)) {
@@ -668,6 +704,7 @@ public final class LceCodec extends ChannelDuplexHandler {
             this.toJava.edge.playerAt(this.toJava.dimension, packet.getDouble(r), packet.getDouble(r + 24), b -> toVia(ctx, b));
         }
         if (this.pendingBlockAck != null && this.ackTargets == null && (id == 0x0F || id == 0x0E)) ackTargetsFrom(id, packet);
+        if (id == 0xFF) writeGoodbye(ctx, out); // leaving: the goodbye message goes before the disconnect
         final ByteBuf lce = this.toLce.translate(id, packet);
         if (this.config.debug() && id != 0x0A && id != 0x0B && id != 0x0C && id != 0x0D && id != 0x00) {
             Logger.LOGGER.info("[LCE] client 0x" + Integer.toHexString(id) + (lce == null ? " dropped" : " -> LCE " + ByteBufUtil.hexDump(lce, lce.readerIndex(), Math.min(lce.readableBytes(), 48))));
