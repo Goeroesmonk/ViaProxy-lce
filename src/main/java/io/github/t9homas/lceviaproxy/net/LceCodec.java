@@ -625,6 +625,9 @@ public final class LceCodec extends ChannelDuplexHandler {
     // ------------------------------------------------------------------ goodbye message
 
     private boolean goodbyeSent;
+    /** The client's disconnect, held back until after the goodbye message. */
+    private boolean quitPending;
+    private static final long GOODBYE_DELAY_MS = 300;
 
     /** The goodbye chat message (config goodbye-message), once, while playing. */
     private void writeGoodbye(final ChannelHandlerContext ctx, final ByteBuf out) {
@@ -646,10 +649,27 @@ public final class LceCodec extends ChannelDuplexHandler {
             final ByteBuf out = ctx.alloc().buffer();
             writeGoodbye(ctx, out);
             if (out.isReadable()) {
-                ctx.writeAndFlush(out).addListener(f -> ctx.close(promise));
+                ctx.writeAndFlush(out).addListener(f -> ctx.executor().schedule(() -> ctx.close(promise), GOODBYE_DELAY_MS, TimeUnit.MILLISECONDS));
                 return;
             }
             out.release();
+        }
+        // ViaProxy closes right after writing the client's last packets (disconnect, goodbye) without flushing them;
+        // Netty drops unflushed data on close, so flush first. After a goodbye wait a little, so the server handles
+        // the chat message before the disconnect.
+        if (ctx.channel().isActive()) {
+            final long delay = this.goodbyeSent ? GOODBYE_DELAY_MS : 0;
+            ctx.writeAndFlush(io.netty.buffer.Unpooled.EMPTY_BUFFER).addListener(f -> ctx.executor().schedule(() -> {
+                if (this.quitPending && ctx.channel().isActive()) {
+                    this.quitPending = false;
+                    final ByteBuf quit = ctx.alloc().buffer(9);
+                    quit.writeInt(5).writeByte(0xFF).writeInt(1); // disconnect: quitting
+                    ctx.writeAndFlush(quit).addListener(g -> ctx.close(promise));
+                } else {
+                    ctx.close(promise);
+                }
+            }, delay, TimeUnit.MILLISECONDS));
+            return;
         }
         super.close(ctx, promise);
     }
@@ -707,7 +727,13 @@ public final class LceCodec extends ChannelDuplexHandler {
             this.toJava.edge.playerAt(this.toJava.dimension, packet.getDouble(r), packet.getDouble(r + 24), b -> toVia(ctx, b));
         }
         if (this.pendingBlockAck != null && this.ackTargets == null && (id == 0x0F || id == 0x0E)) ackTargetsFrom(id, packet);
-        if (id == 0xFF) writeGoodbye(ctx, out); // leaving: the goodbye message goes before the disconnect
+        if (id == 0xFF && !this.goodbyeSent) {
+            writeGoodbye(ctx, out); // leaving: the goodbye message goes first...
+            if (out.isReadable()) {
+                this.quitPending = true; // ...and the disconnect a moment later (see close), so the server shows it
+                return;
+            }
+        }
         final ByteBuf lce = this.toLce.translate(id, packet);
         if (this.config.debug() && id != 0x0A && id != 0x0B && id != 0x0C && id != 0x0D && id != 0x00) {
             Logger.LOGGER.info("[LCE] client 0x" + Integer.toHexString(id) + (lce == null ? " dropped" : " -> LCE " + ByteBufUtil.hexDump(lce, lce.readerIndex(), Math.min(lce.readableBytes(), 48))));
