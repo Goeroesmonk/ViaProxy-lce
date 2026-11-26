@@ -572,7 +572,7 @@ public final class LceToJava {
             case 0x32 -> { // chunk visibility
                 final int cx = in.readInt(), cz = in.readInt();
                 final boolean visible = in.readUnsignedByte() != 0;
-                if (!visible) {
+                if (!visible && (this.edge == null || !this.edge.drawsSea(this.dimension, cx, cz))) {
                     out.add(ChunkConverter.unloadChunk(this.alloc, cx, cz));
                     this.loadedChunks.remove(chunkKey(cx, cz));
                 }
@@ -1310,6 +1310,9 @@ public final class LceToJava {
 
         if (!sameLevel(levelIdx)) {
             return;
+        }
+        if (this.edge != null && this.edge.drawsSea(this.dimension, x >> 4, z >> 4)) {
+            return; // outside the world: the plugin shows the sea there
         }
         final byte[] data = size == 0 ? new byte[0] : ChunkConverter.decompress(compressed);
         if (full) {

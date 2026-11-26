@@ -486,8 +486,10 @@ public final class LceCodec extends ChannelDuplexHandler {
             Types.writeVarInt(framed, packet.readableBytes() + idLen);
             Types.writeVarInt(framed, id);
             framed.writeBytes(packet);
-            if (doorTop) {
-                // LCE answers a click on a door's top half with that (unchanged) top half first and sends the changed
+            if (doorTop || id == 0x85) {
+                // Sign editor (0x85): the LCE server opens it before it sends the placed sign block, and newer clients
+                // close a sign editor right away when there is no sign. Hand it over after the block.
+                // Door top (0x35): LCE answers a click on a door's top half with that (unchanged) top half first and sends the changed
                 // bottom half a tick later. Java clients draw the door from the bottom half, so the door flicked back.
                 // Hand the top half over after the bottom half.
                 ctx.executor().schedule(() -> {
@@ -496,7 +498,7 @@ public final class LceCodec extends ChannelDuplexHandler {
                     } else {
                         framed.release();
                     }
-                }, DOOR_TOP_DELAY_MS, TimeUnit.MILLISECONDS);
+                }, doorTop ? DOOR_TOP_DELAY_MS : SIGN_EDITOR_DELAY_MS, TimeUnit.MILLISECONDS);
                 return;
             }
             ctx.fireChannelRead(framed);
@@ -506,6 +508,7 @@ public final class LceCodec extends ChannelDuplexHandler {
     }
 
     private static final long DOOR_TOP_DELAY_MS = 120;
+    private static final long SIGN_EDITOR_DELAY_MS = 200;
 
     /**
      * 1.6.4 block change (after the id): int x, byte y, int z, short block, byte meta.

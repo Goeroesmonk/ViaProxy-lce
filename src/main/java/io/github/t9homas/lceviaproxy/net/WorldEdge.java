@@ -45,6 +45,7 @@ final class WorldEdge {
     private byte[] seaChunk;      // zlib compressed 1.6.4 chunk data
     private int seaMask;
     private boolean borderPending;
+    private long resendAt;
 
     WorldEdge(final Channel channel, final ByteBufAllocator alloc, final boolean debug) {
         this.channel = channel;
@@ -68,6 +69,12 @@ final class WorldEdge {
         return 0; // the End: no edge
     }
 
+    /** A chunk outside the overworld, where the plugin shows the sea (server chunks there are dropped). */
+    boolean drawsSea(final int dim, final int cx, final int cz) {
+        final int size = size(dim);
+        return dim == 0 && size > 0 && outside(size, cx, cz);
+    }
+
     private boolean outside(final int size, final int cx, final int cz) {
         final int half = size / 2;
         return cx < -half || cx >= size - half || cz < -half || cz >= size - half;
@@ -83,6 +90,13 @@ final class WorldEdge {
             this.sent.clear(); // the client dropped all chunks
             this.lastCx = this.lastCz = Integer.MIN_VALUE;
             this.borderPending = true;
+            // the client drops chunks that come before it knows its view area: send the sea again a bit later
+            this.resendAt = System.currentTimeMillis() + 2000;
+        }
+        if (this.resendAt != 0 && System.currentTimeMillis() >= this.resendAt) {
+            this.resendAt = 0;
+            this.sent.clear();
+            this.lastCx = this.lastCz = Integer.MIN_VALUE;
         }
         final int size = size(dim);
         if (size == 0) return;
