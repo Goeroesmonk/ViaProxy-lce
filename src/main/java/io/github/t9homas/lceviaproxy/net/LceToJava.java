@@ -213,6 +213,9 @@ public final class LceToJava {
                 this.rotations.clear();
                 this.spawned.clear();
                 this.bats.clear();
+                this.vehiclePos.clear();
+                this.vehicleTop.clear();
+                this.riding = -1;
                 if (this.locator != null) this.locator.clear();
                 if (this.skins != null) this.skins.clear();
                 if (newEid > 0) {
@@ -316,6 +319,7 @@ public final class LceToJava {
                 }
                 this.rotations.put(eid, new byte[]{yaw, pitch});
                 this.spawned.add(eid);
+                trackVehicle(eid, type == 10 ? 0.35 : type == 1 ? 0.3 : -1, x, y, z); // minecart / boat
                 final ByteBuf b = pkt(0x17);
                 b.writeInt(eid(eid));
                 b.writeByte(type);
@@ -349,6 +353,7 @@ public final class LceToJava {
                 this.spawned.add(eid);
                 if (type == BAT) this.bats.add(eid);
                 else this.bats.remove(eid);
+                trackVehicle(eid, type == 90 ? 0.9 : type == 100 ? 1.6 : -1, x, y, z); // pig / horse
                 final ByteBuf b = pkt(0x18);
                 b.writeInt(eid(eid));
                 b.writeByte(type);
@@ -408,6 +413,7 @@ public final class LceToJava {
                     if (this.locator != null) this.locator.remove(e);
                     if (this.skins != null) this.skins.remove(e);
                     this.bats.remove(e);
+                    trackVehicle(e, -1, 0, 0, 0);
                 }
                 out.add(b);
             }
@@ -430,6 +436,7 @@ public final class LceToJava {
                 this.rotations.put(eid, new byte[]{yaw, pitch});
                 this.spawned.add(eid);
                 if (this.locator != null) this.locator.teleport(eid, x, y, z);
+                moveVehicle(eid, x, y, z, true);
                 final ByteBuf b = pkt(0x22);
                 b.writeInt(eid(eid));
                 b.writeInt(x);
@@ -441,7 +448,22 @@ public final class LceToJava {
             }
             case 0x23 -> copy(in, out, id, "eb");
             case 0x26 -> copy(in, out, id, "eb");
-            case 0x27 -> copy(in, out, id, "eeb");
+            case 0x27 -> { // attach entity (riding / leash)
+                final int rider = in.readInt(), vehicle = in.readInt();
+                final byte type = in.readByte();
+                final ByteBuf b = pkt(0x27);
+                b.writeInt(eid(rider));
+                b.writeInt(vehicle < 0 ? vehicle : eid(vehicle));
+                b.writeByte(type);
+                out.add(b);
+                if (rider == this.serverEntityId && type == 0) {
+                    if (vehicle >= 0) {
+                        this.riding = vehicle;
+                    } else {
+                        dismount(out);
+                    }
+                }
+            }
             case 0x28 -> { // metadata
                 final ByteBuf b = pkt(0x28);
                 try {
@@ -900,6 +922,7 @@ public final class LceToJava {
 
     private void relMove(final int eid, final byte dx, final byte dy, final byte dz, final List<ByteBuf> out) {
         if (this.locator != null) this.locator.move(eid, dx, dy, dz);
+        moveVehicle(eid, dx, dy, dz, false);
         final ByteBuf b = pkt(0x1F);
         b.writeInt(eid(eid));
         b.writeByte(dx);
@@ -926,6 +949,7 @@ public final class LceToJava {
 
     private void lookMove(final int eid, final byte dx, final byte dy, final byte dz, final byte dYaw, final byte dPitch, final List<ByteBuf> out) {
         if (this.locator != null) this.locator.move(eid, dx, dy, dz);
+        moveVehicle(eid, dx, dy, dz, false);
         final byte[] r = rotate(eid, dYaw, dPitch);
         final ByteBuf b = pkt(0x21);
         b.writeInt(eid(eid));
@@ -935,6 +959,62 @@ public final class LceToJava {
         b.writeByte(r[0]);
         b.writeByte(r[1]);
         out.add(b);
+    }
+
+    // ------------------------------------------------------------------ vehicles
+
+    /** Vehicle entity id -> {x, y, z} in 1/32 blocks. */
+    private final Map<Integer, int[]> vehiclePos = new HashMap<>();
+    /** Vehicle entity id -> top of the vehicle above its position, in blocks. */
+    private final Map<Integer, Double> vehicleTop = new HashMap<>();
+    private int riding = -1;
+    /** The Java client's last rotation (from its move packets). */
+    float clientYaw, clientPitch;
+
+    private void trackVehicle(final int eid, final double top, final int x, final int y, final int z) {
+        if (top < 0) {
+            this.vehicleTop.remove(eid);
+            this.vehiclePos.remove(eid);
+            return;
+        }
+        this.vehicleTop.put(eid, top);
+        this.vehiclePos.put(eid, new int[]{x, y, z});
+    }
+
+    private void moveVehicle(final int eid, final int dx, final int dy, final int dz, final boolean absolute) {
+        final int[] p = this.vehiclePos.get(eid);
+        if (p == null) return;
+        if (absolute) {
+            p[0] = dx;
+            p[1] = dy;
+            p[2] = dz;
+        } else {
+            p[0] += dx;
+            p[1] += dy;
+            p[2] += dz;
+        }
+    }
+
+    /**
+     * Getting out of a vehicle: the LCE server does not send a new position (the LCE client puts itself on top of the
+     * vehicle, Entity::ride). Java clients wait for the server, so they stayed inside the vehicle. Do what the LCE client does.
+     */
+    private void dismount(final List<ByteBuf> out) {
+        final int[] p = this.vehiclePos.get(this.riding);
+        final Double top = this.vehicleTop.get(this.riding);
+        this.riding = -1;
+        if (p == null || top == null) return;
+        final double feet = p[1] / 32.0 + top;
+        final ByteBuf b = pkt(0x0D);
+        b.writeDouble(p[0] / 32.0);
+        b.writeDouble(feet + 1.62);
+        b.writeDouble(feet);
+        b.writeDouble(p[2] / 32.0);
+        b.writeFloat(this.clientYaw);
+        b.writeFloat(this.clientPitch);
+        b.writeBoolean(false);
+        out.add(b);
+        if (this.debug) debugLog("Dismounted: placed on top of the vehicle at y " + feet);
     }
 
     // ------------------------------------------------------------------ chunks

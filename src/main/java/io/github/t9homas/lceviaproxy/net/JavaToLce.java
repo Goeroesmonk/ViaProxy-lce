@@ -36,6 +36,14 @@ public final class JavaToLce {
      * @return the LCE packet, or null to drop it
      */
     public ByteBuf translate(final int id, final ByteBuf in) {
+        // remember the rotation (used when getting out of a vehicle)
+        if (id == 0x0C && in.readableBytes() >= 8) {
+            this.ids.clientYaw = in.getFloat(in.readerIndex());
+            this.ids.clientPitch = in.getFloat(in.readerIndex() + 4);
+        } else if (id == 0x0D && in.readableBytes() >= 40) {
+            this.ids.clientYaw = in.getFloat(in.readerIndex() + 32);
+            this.ids.clientPitch = in.getFloat(in.readerIndex() + 36);
+        }
         switch (id) {
             case 0x00 -> {
                 final ByteBuf b = pkt(0x00);
