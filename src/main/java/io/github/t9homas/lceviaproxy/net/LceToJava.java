@@ -35,6 +35,8 @@ public final class LceToJava {
     private final ByteBufAllocator alloc;
     private final boolean debug;
     private final Map<Integer, byte[]> rotations = new HashMap<>();
+    /** Server entity ids that were spawned and not removed (to repair 11 bit ids). */
+    private final java.util.Set<Integer> spawned = new java.util.HashSet<>();
     private final java.util.Set<Integer> bats = new java.util.HashSet<>();
 
     private static final int BAT = 65;
@@ -188,6 +190,7 @@ public final class LceToJava {
                 in.readUnsignedByte(); // hell scale
                 this.dimension = dim;
                 this.rotations.clear();
+                this.spawned.clear();
                 this.bats.clear();
                 if (newEid > 0) {
                     if (this.debug && newEid != this.serverEntityId) {
@@ -229,6 +232,7 @@ public final class LceToJava {
                     break; // the Java client never gets a spawn packet for itself
                 }
                 this.rotations.put(eid, new byte[]{yaw, pitch});
+                this.spawned.add(eid);
                 final ByteBuf b = pkt(0x14);
                 b.writeInt(eid(eid));
                 Types.writeString(b, name.length() > 16 ? name.substring(0, 16) : name);
@@ -260,6 +264,7 @@ public final class LceToJava {
                     vz = in.readShort();
                 }
                 this.rotations.put(eid, new byte[]{yaw, pitch});
+                this.spawned.add(eid);
                 final ByteBuf b = pkt(0x17);
                 b.writeInt(eid(eid));
                 b.writeByte(type);
@@ -290,6 +295,7 @@ public final class LceToJava {
                     throw e;
                 }
                 this.rotations.put(eid, new byte[]{yaw, pitch});
+                this.spawned.add(eid);
                 if (type == BAT) this.bats.add(eid);
                 else this.bats.remove(eid);
                 final ByteBuf b = pkt(0x18);
@@ -312,10 +318,17 @@ public final class LceToJava {
             case 0x1A -> copy(in, out, id, "eiiis");
             case 0x1B -> copy(in, out, id, "ffbb");
             case 0x1C -> { // velocity
-                final int idAndFlag = in.readShort();
-                final int eid = idAndFlag & 0x7FF;
+                final int idAndFlag = in.readShort() & 0xFFFF;
+                int eid = smallId(idAndFlag);
                 final int vx, vy, vz;
-                if ((idAndFlag & 0x800) != 0) {
+                if ((idAndFlag & 0x800) != 0 && isBrokenVelocity(idAndFlag, in)) {
+                    // LCE server bug: an entity id >= 2048 sets the "small values" flag by itself, the values are shorts.
+                    // (LCE clients crash on this packet.)
+                    eid = idAndFlag;
+                    vx = in.readShort();
+                    vy = in.readShort();
+                    vz = in.readShort();
+                } else if ((idAndFlag & 0x800) != 0) {
                     vx = in.readByte() * 16;
                     vy = in.readByte() * 16;
                     vz = in.readByte() * 16;
@@ -340,6 +353,7 @@ public final class LceToJava {
                 for (int e : ids) {
                     b.writeInt(eid(e));
                     this.rotations.remove(e);
+                    this.spawned.remove(e);
                     this.bats.remove(e);
                 }
                 out.add(b);
@@ -361,6 +375,7 @@ public final class LceToJava {
                 final int x = in.readInt(), y = in.readInt(), z = in.readInt();
                 final byte yaw = in.readByte(), pitch = in.readByte();
                 this.rotations.put(eid, new byte[]{yaw, pitch});
+                this.spawned.add(eid);
                 final ByteBuf b = pkt(0x22);
                 b.writeInt(eid(eid));
                 b.writeInt(x);
@@ -744,15 +759,15 @@ public final class LceToJava {
             }
 
             // ---------------------------------------------------------- small entity moves
-            case 0xA2 -> entityOnly(in.readShort() & 0x7FF, out);
+            case 0xA2 -> entityOnly(smallId(in.readShort()), out);
             case 0xA3 -> { // small pos
                 final int idAndY = in.readShort();
                 final int xz = in.readByte();
-                relMove(idAndY & 0x7FF, (byte) (xz >> 4), (byte) (idAndY >> 11), (byte) ((xz << 28) >> 28), out);
+                relMove(smallId(idAndY), (byte) (xz >> 4), (byte) (idAndY >> 11), (byte) ((xz << 28) >> 28), out);
             }
             case 0xA4 -> { // small rot (yaw delta only)
                 final int idAndRot = in.readShort();
-                look(idAndRot & 0x7FF, (byte) (idAndRot >> 11), (byte) 0, out);
+                look(smallId(idAndRot), (byte) (idAndRot >> 11), (byte) 0, out);
             }
             case 0xA5 -> { // small pos + rot
                 final int idAndRot = in.readShort();
@@ -760,7 +775,7 @@ public final class LceToJava {
                 final byte dx = (byte) (xyz >> 11);
                 final byte dy = (byte) ((xyz << 21) >> 26);
                 final byte dz = (byte) ((xyz << 27) >> 27);
-                lookMove(idAndRot & 0x7FF, dx, dy, dz, (byte) (idAndRot >> 11), (byte) 0, out);
+                lookMove(smallId(idAndRot), dx, dy, dz, (byte) (idAndRot >> 11), (byte) 0, out);
             }
             case 0xA6 -> in.skipBytes(1 + 4 + 4); // XZ packet
             case 0xA7 -> { // game command
@@ -773,6 +788,45 @@ public final class LceToJava {
             }
         }
         return true;
+    }
+
+    /** Packet ids an LCE server sends (Packet.cpp, receiveOnClient). */
+    private static final java.util.BitSet SERVER_PACKETS = new java.util.BitSet(256);
+
+    static {
+        for (int id : new int[]{0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 16, 17, 18, 20, 22, 23, 24, 25, 26, 28, 29, 30, 31, 32, 33, 34, 35,
+                38, 39, 40, 41, 42, 43, 44, 50, 51, 52, 53, 54, 55, 60, 61, 62, 63, 70, 71, 100, 101, 103, 104, 105, 106, 107, 130, 131, 132,
+                133, 153, 154, 155, 156, 157, 158, 160, 161, 162, 163, 164, 165, 166, 200, 201, 202, 206, 207, 208, 209, 250, 255}) {
+            SERVER_PACKETS.set(id);
+        }
+    }
+
+    /**
+     * Small move / velocity packets carry only 11 bits of the entity id. Entities with ids >= 2048 arrive cut down:
+     * if no entity has the short id but one with the same low 11 bits exists, it is that one.
+     */
+    private int smallId(final int packed) {
+        final int id = packed & 0x7FF;
+        if (this.spawned.contains(id)) return id;
+        for (int high = 1; high < 32; high++) {
+            final int full = id | (high << 11);
+            if (this.spawned.contains(full)) return full;
+        }
+        return id;
+    }
+
+    /**
+     * A velocity packet with the 0x800 flag is either a small one (3 bytes follow) or one for an entity id >= 2048, where
+     * the id overlaps the flag and 3 shorts follow. Decide by which entity exists, else by which reading lands on a
+     * valid next packet.
+     */
+    private boolean isBrokenVelocity(final int idAndFlag, final ByteBuf in) {
+        final boolean fullKnown = this.spawned.contains(idAndFlag);
+        final boolean smallKnown = this.spawned.contains(idAndFlag & 0x7FF);
+        if (fullKnown != smallKnown) return fullKnown;
+        if (in.readableBytes() < 7) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
+        final int r = in.readerIndex();
+        return !SERVER_PACKETS.get(in.getUnsignedByte(r + 3)) && SERVER_PACKETS.get(in.getUnsignedByte(r + 6));
     }
 
     // ------------------------------------------------------------------ entity movement (LCE rotations are relative)
