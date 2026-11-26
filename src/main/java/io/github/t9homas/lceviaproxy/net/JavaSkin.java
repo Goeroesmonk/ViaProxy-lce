@@ -34,6 +34,7 @@ public final class JavaSkin {
             .build();
 
     /**
+     * @param png      the 64x32 PNG sent to the server, or null (skin=none: only our own texture)
      * @param texture the signed Mojang textures (value, signature) for our own player list entry, or null (PNG file)
      */
     public record Skin(byte[] png, int skinId, String path, String[] texture) {
@@ -51,7 +52,17 @@ public final class JavaSkin {
      */
     public static CompletableFuture<Skin> load(final String setting, final String userName) {
         if (setting.equalsIgnoreCase("none") || setting.equalsIgnoreCase("off")) {
-            return CompletableFuture.completedFuture(null);
+            // LCE players see a default skin; we still see our own Java skin
+            return CompletableFuture.supplyAsync(() -> {
+                try {
+                    final Mojang mojang = mojangSkin(userName);
+                    if (mojang == null || mojang.signature == null) return null;
+                    Logger.LOGGER.info("LCE: skin=none, LCE players see a default skin (your Java skin is only shown to you)");
+                    return new Skin(null, 0, null, new String[]{mojang.value, mojang.signature});
+                } catch (Exception e) {
+                    return null;
+                }
+            });
         }
         return CompletableFuture.supplyAsync(() -> {
             try {

@@ -51,7 +51,7 @@ public final class LceCodec extends ChannelDuplexHandler {
     private boolean skinAnnounced;
 
     // the last server packets, for the log when the stream gets out of sync
-    private static final int HISTORY = 8;
+    private static final int HISTORY = 32;
     private final int[] historyIds = new int[HISTORY];
     private final byte[][] historyBytes = new byte[HISTORY][];
     private int historyPos;
@@ -337,8 +337,8 @@ public final class LceCodec extends ChannelDuplexHandler {
             final TablistStorage old =
                     user.get(TablistStorage.class);
             // ViaLegacy looks it up by its own class
-            user.getStoredObjects().put(TablistStorage.class, new LceTablist(user, old, () -> this.skin != null && this.skin.texture() != null
-                    ? new GameProfile.Property("textures", this.skin.texture()[0], this.skin.texture()[1]) : null));
+            user.getStoredObjects().put(TablistStorage.class, new LceTablist(user, old, () -> this.selfTexture != null
+                    ? new GameProfile.Property("textures", this.selfTexture[0], this.selfTexture[1]) : null));
         } catch (Throwable t) {
             Logger.LOGGER.warn("LCE: could not set up the player list: " + t);
         }
@@ -362,19 +362,25 @@ public final class LceCodec extends ChannelDuplexHandler {
 
     private static final long SKIN_WAIT_MS = 3000;
     private boolean skinDone;
+    /** Our signed Mojang textures (value, signature) for our own player list entry, or null. */
+    private String[] selfTexture;
     private long loginWaitStart;
 
     private void onSkin(final ChannelHandlerContext ctx, final JavaSkin.Skin skin) {
         this.skinDone = true;
         if (this.state == State.CLOSED || !ctx.channel().isActive()) return;
-        if (skin != null) {
+        if (skin != null && skin.texture() != null) {
+            this.selfTexture = skin.texture();
+            if (this.toJava.skins != null) this.toJava.skins.selfTexture(skin.texture()[0], skin.texture()[1]);
+        }
+        final boolean upload = skin != null && skin.png() != null; // skin=none: only shown to ourselves
+        if (upload) {
             this.skin = skin;
-            if (skin.texture() != null && this.toJava.skins != null) this.toJava.skins.selfTexture(skin.texture()[0], skin.texture()[1]);
             Logger.LOGGER.info("LCE: sending your skin to the server as " + skin.path() + " (" + skin.png().length + " bytes)");
         }
         if (this.state == State.LOGIN && this.loginWaitStart != 0) {
             process(ctx); // the login waited for it (and announces the skin)
-        } else if (skin != null && this.state == State.PLAY) {
+        } else if (upload && this.state == State.PLAY) {
             announceSkin(ctx);
         }
         // HANDSHAKE / PRE_LOGIN: the login packet carries it; LOGIN: announced when the login finishes
