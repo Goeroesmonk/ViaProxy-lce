@@ -53,6 +53,8 @@ public final class LceToJava {
     private final java.util.ArrayDeque<Runnable> after = new java.util.ArrayDeque<>();
 
     private static final int BAT = 65;
+    /** "<name>" in chat, where the server may color the name. */
+    private static final java.util.regex.Pattern CHAT_NAME = java.util.regex.Pattern.compile("<([^<>]{1,96})>");
 
     /** Entity id the Java client has for itself (from Login, never changes). */
     int playerEntityId = -1;
@@ -178,7 +180,19 @@ public final class LceToJava {
                 for (int i = 0; i < ((counts >> 4) & 0xF); i++) strings.add(Types.readString(in));
                 for (int i = 0; i < (counts & 0xF); i++) ints.add(in.readInt());
                 final String text = LceText.chat(type, strings, ints);
-                if (text != null && !text.isEmpty()) out.add(chat(text));
+                if (text != null && !text.isEmpty()) {
+                    out.add(chat(text));
+                    if (this.skins != null) {
+                        final java.util.regex.Matcher m = CHAT_NAME.matcher(text);
+                        while (m.find()) {
+                            final String colored = m.group(1);
+                            final String plain = colored.replaceAll("\u00A7.", "");
+                            if (colored.indexOf('\u00A7') >= 0 && plain.matches("[A-Za-z0-9_ ]{1,16}")) {
+                                this.after.add(() -> this.skins.coloredName(plain, colored));
+                            }
+                        }
+                    }
+                }
             }
             case 0x04 -> copy(in, out, id, "ll");
             case 0x05 -> { // equipment

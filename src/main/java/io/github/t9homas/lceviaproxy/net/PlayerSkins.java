@@ -83,6 +83,42 @@ final class PlayerSkins {
         }
     }
 
+    /** Names in the colors the server shows them in chat (lower case name -> name with color codes). */
+    private final Map<String, String> colors = new HashMap<>();
+
+    /** The server showed a player's name in colors in chat: show it like that in the tab list too. */
+    void coloredName(final String name, final String colored) {
+        if (colored.equals(this.colors.put(name.toLowerCase(), colored))) return;
+        for (Entry e : this.shown.values()) {
+            if (e.name.equalsIgnoreCase(name)) sendDisplayName(e);
+        }
+        if (this.selfEntry != null && this.selfEntry.name.equalsIgnoreCase(name)) sendDisplayName(this.selfEntry);
+    }
+
+    private String displayName(final Entry e) {
+        final String colored = this.colors.get(e.name.toLowerCase());
+        if (colored == null) return null;
+        final com.google.gson.JsonObject o = new com.google.gson.JsonObject();
+        o.addProperty("text", colored);
+        return o.toString();
+    }
+
+    private void sendDisplayName(final Entry e) {
+        final ProxyConnection proxy = ProxyConnection.fromChannel(this.channel);
+        final UserConnection user = proxy == null ? null : proxy.getUserConnection();
+        if (user == null || !user.getProtocolInfo().getPipeline().contains(Protocolr1_7_6_10Tor1_8.class)) return;
+        try {
+            final PacketWrapper p = PacketWrapper.create(ClientboundPackets1_8.PLAYER_INFO, user);
+            p.write(Types.VAR_INT, 3); // update display name
+            p.write(Types.VAR_INT, 1);
+            p.write(Types.UUID, e.uuid);
+            p.write(Types.OPTIONAL_STRING, displayName(e));
+            p.send(Protocolr1_7_6_10Tor1_8.class);
+        } catch (Exception ex) {
+            Logger.LOGGER.warn("LCE: could not color the name of " + e.name + ": " + ex);
+        }
+    }
+
     void remove(final int eid) {
         final Entry e = this.shown.remove(eid);
         if (e != null && !this.shown.containsValue(e)) send(e, false);
@@ -109,7 +145,7 @@ final class PlayerSkins {
                 p.write(Types.PROFILE_PROPERTY_ARRAY, properties);
                 p.write(Types.VAR_INT, 0); // game mode
                 p.write(Types.VAR_INT, 0); // ping
-                p.write(Types.OPTIONAL_STRING, null); // no display name
+                p.write(Types.OPTIONAL_STRING, displayName(e)); // the name as colored in chat, or none
             }
             p.send(Protocolr1_7_6_10Tor1_8.class);
             if (this.debug) Logger.LOGGER.info("[LCE] player list entry " + (add ? "for " : "removed for ") + e.name);

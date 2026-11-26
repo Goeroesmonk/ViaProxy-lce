@@ -73,6 +73,7 @@ public class LcePlugin extends ViaProxyPlugin {
         }
         event.setServerVersion(LceVersions.baseVersion());
         if (config.lceSkins()) io.github.t9homas.lceviaproxy.skin.LceSkins.install();
+        io.github.t9homas.lceviaproxy.net.DelayedBlockAck.install();
         Logger.LOGGER.info("Connecting to LCE Revelations server " + address);
     }
 
