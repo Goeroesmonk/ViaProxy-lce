@@ -380,8 +380,16 @@ public final class LceToJava {
                 meta.release();
                 out.add(b);
             }
-            case 0x19 -> copy(in, out, id, "eSiiii");
-            case 0x1A -> copy(in, out, id, "eiiis");
+            case 0x19 -> { // spawn (painting / xp orb / lightning): remember the entity
+                final int spawnedId = in.getInt(in.readerIndex());
+                copy(in, out, id, "eSiiii");
+                this.spawned.add(spawnedId);
+            }
+            case 0x1A -> { // spawn (painting / xp orb / lightning): remember the entity
+                final int spawnedId = in.getInt(in.readerIndex());
+                copy(in, out, id, "eiiis");
+                this.spawned.add(spawnedId);
+            }
             case 0x1B -> copy(in, out, id, "ffbb");
             case 0x1C -> { // velocity
                 final int idAndFlag = in.readShort() & 0xFFFF;
@@ -638,7 +646,11 @@ public final class LceToJava {
             }
             case 0x3F -> copy(in, out, id, "Sfffffffi");
             case 0x46 -> copy(in, out, id, "bb");
-            case 0x47 -> copy(in, out, id, "ebiii");
+            case 0x47 -> { // spawn (painting / xp orb / lightning): remember the entity
+                final int spawnedId = in.getInt(in.readerIndex());
+                copy(in, out, id, "ebiii");
+                this.spawned.add(spawnedId);
+            }
             case 0x64 -> { // open window
                 final int windowId = in.readUnsignedByte();
                 final int type = in.readUnsignedByte();
@@ -932,10 +944,133 @@ public final class LceToJava {
         if (!needsShorts) return false;
         // both readings land on a valid packet id: does the next packet name an entity we know?
         // (the server sends metadata / moves / velocity for the same entities in a row)
-        final int small = nextPacketScore(in, r + 3), shorts = nextPacketScore(in, r + 6);
-        if (small != shorts) return shorts > small;
-        // still a tie: go by which entity exists
-        return known(idAndFlag) && !known(idAndFlag & 0x7FF);
+        final int limit = r + 6 + 64; // both readings are scored over the same bytes
+        final int small = chainScore(in, r + 3, limit), shorts = chainScore(in, r + 6, limit);
+        if (this.debug && shorts > small) {
+            debugLog("velocity read as shorts 0x" + Integer.toHexString(idAndFlag) + ": bytes score " + small + ", shorts score " + shorts + " "
+                    + io.netty.buffer.ByteBufUtil.hexDump(in, r, Math.min(in.readableBytes(), 24)));
+        }
+        // a tie: the small form is by far the most common
+        return shorts > small;
+    }
+
+    /**
+     * How believable the packets starting at {@code at} are: follows the packets of a known size up to {@code limit} (moves, head
+     * rotations, ...) and adds up {@link #nextPacketScore}; an invalid packet id on the way costs 3.
+     */
+    private int chainScore(final ByteBuf in, int at, final int limit) {
+        int total = 0;
+        for (int step = 0; at < limit && at < in.writerIndex(); step++) {
+            final int id = in.getUnsignedByte(at);
+            if (!SERVER_PACKETS.get(id)) return total - 3;
+            if (step == 0) {
+                total += nextPacketScore(in, at); // may wait for more data
+            } else {
+                try {
+                    total += nextPacketScore(in, at);
+                } catch (IndexOutOfBoundsException end) {
+                    return total;
+                }
+            }
+            int len = fixedLength(id);
+            if (id == 0x1C && at + 3 <= in.writerIndex()) len = (in.getUnsignedShort(at + 1) & 0x800) != 0 ? 6 : 9; // velocity
+            if (len == 0) len = variableLength(in, at, id);
+            if (len <= 0) return total;
+            at += len;
+        }
+        return total;
+    }
+
+    /** Length of some variable size packets (with the id byte), -1 if unknown / not all there / not plausible. */
+    private static int variableLength(final ByteBuf in, final int at, final int id) {
+        try {
+            int p = at + 1;
+            switch (id) {
+                case 0x28 -> { // metadata
+                    p += 4;
+                    p = skipMetadata(in, p);
+                }
+                case 0x05 -> { // equipment
+                    p += 4 + 2;
+                    p = skipItem(in, p);
+                }
+                case 0x2C -> { // attributes
+                    p += 4;
+                    final int count = in.getInt(p);
+                    if (count < 0 || count > 32) return -1;
+                    p += 4;
+                    for (int i = 0; i < count; i++) {
+                        p += 2 + 8;
+                        final int mods = in.getShort(p);
+                        if (mods < 0 || mods > 64) return -1;
+                        p += 2 + mods * (4 + 8 + 1);
+                    }
+                }
+                case 0x33 -> { // chunk
+                    if (in.getUnsignedByte(p) > 3) return -1;
+                    p += 1 + 4 + 2 + 4 + 3;
+                    final int size = in.getInt(p) & 0x3FFFFFFF;
+                    if (size > 4 * 1024 * 1024) return -1;
+                    p += 4 + size;
+                }
+                default -> {
+                    return -1;
+                }
+            }
+            return p <= in.writerIndex() ? p - at : -1;
+        } catch (IndexOutOfBoundsException e) {
+            return -1;
+        }
+    }
+
+    private static int skipMetadata(final ByteBuf in, int p) {
+        for (int n = 0; n < 32; n++) {
+            final int header = in.getUnsignedByte(p++);
+            if (header == 0x7F) return p;
+            switch (header >> 5) {
+                case 0 -> p += 1;
+                case 1 -> p += 2;
+                case 2, 3 -> p += 4;
+                case 4 -> {
+                    final int len = in.getShort(p);
+                    if (len < 0 || len > 1024) throw new IndexOutOfBoundsException();
+                    p += 2 + len * 2;
+                }
+                case 5 -> p = skipItem(in, p);
+                case 6 -> p += 12;
+                default -> throw new IndexOutOfBoundsException();
+            }
+        }
+        throw new IndexOutOfBoundsException(); // no end marker: not metadata
+    }
+
+    private static int skipItem(final ByteBuf in, int p) {
+        final int item = in.getShort(p);
+        p += 2;
+        if (item < 0) return p;
+        p += 1 + 2;
+        final int nbt = in.getShort(p);
+        p += 2;
+        if (nbt > 0) p += nbt;
+        return p;
+    }
+
+    /** Length of packets with a fixed size (with the id byte), 0 for others. */
+    private static int fixedLength(final int id) {
+        return switch (id) {
+            case 0x00 -> 5;          // keep alive
+            case 0x04 -> 17;         // time
+            case 0x12, 0x23, 0x26, 0x2A -> 6; // int entity id + byte
+            case 0x1E, 0xA2, 0xA4 -> 3;
+            case 0xA3 -> 4;
+            case 0xA5, 0x20 -> 5;
+            case 0x1F -> 6;
+            case 0x21 -> 8;
+            case 0x22 -> 17;
+            case 0x27 -> 10;
+            case 0xC9 -> 12;         // player info
+            default -> 0;
+        };
     }
 
     /**
