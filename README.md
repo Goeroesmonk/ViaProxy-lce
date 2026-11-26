@@ -24,7 +24,8 @@ Your user name is the one of your Java client (with `proxy-online-mode` off, any
 - Play on Revelations servers: world, entities, inventories, chat, sounds, signs, ...
 - **Your skin for LCE players:** your Java skin is sent to the server, so LCE players see it.
 - **Locator bar** (1.21.6+ clients): the other players show up on the locator bar, each in a color made from their name.
-  LCE only tells the client about players in view distance, so players further away are not shown.
+  It shows every player the server sends you (the same players a minimap like Xaero's shows): LCE servers send players
+  within the server's view distance (up to 512 blocks), also outside your own render distance.
 - Server list: shows the player count of the server.
 
 ## Config
