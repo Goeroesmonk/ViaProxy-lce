@@ -29,6 +29,8 @@ Your user name is the one of your Java client (with `proxy-online-mode` off, any
 - **Locator bar** (1.21.6+ clients): the other players show up on the locator bar, each in a color made from their name.
   It shows every player the server sends you: LCE servers send players
   within the server's view distance (up to 512 blocks), also outside your own render distance.
+- **World edge** (1.8+ clients): the edge of the LCE world is shown as a world border, with the endless sea
+  behind it like on LCE (grass on superflat worlds).
 - Server list: shows the player count of the server.
 
 ## Config
@@ -39,6 +41,7 @@ Your user name is the one of your Java client (with `proxy-online-mode` off, any
 |---|---|---|
 | `skin` | `auto` | The skin LCE players see on you. `auto` = the Java skin of your user name (looked up at Mojang), another player's name, a path to a 64x64 / 64x32 PNG, or `none`. LCE only knows 64x32 skins: the second layer is painted onto the first and slim arms are widened. |
 | `lce-skins` | `true` | Show the skins of LCE players. |
+| `world-border` | `true` | Show the edge of the LCE world as a world border, with the sea behind it. |
 | `locator-bar` | `true` | Show the other players on the locator bar of 1.21.6+ clients. |
 | `xuid` | `auto` | Your player id. `auto` makes a stable id from your user name. To be the same player as your LCE client, copy the value from its `uid.dat`, e.g. `0xD8A081207D94B205`. |
 | `netcode-version` | `560` | LCE network version sent at login (Revelations). Change it if the server says your client is outdated. |

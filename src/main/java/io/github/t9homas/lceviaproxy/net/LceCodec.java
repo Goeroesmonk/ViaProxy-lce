@@ -62,6 +62,7 @@ public final class LceCodec extends ChannelDuplexHandler {
         this.toJava = new LceToJava(ctx.alloc(), this.config.debug());
         if (this.config.locatorBar()) this.toJava.locator = new Locator(ctx.channel(), this.config.debug());
         if (this.config.lceSkins()) this.toJava.skins = new PlayerSkins(ctx.channel(), this.config.debug());
+        if (this.config.worldBorder()) this.toJava.edge = new WorldEdge(ctx.channel(), ctx.alloc(), this.config.debug());
         this.toLce = new JavaToLce(ctx.alloc(), this.toJava);
     }
 
@@ -212,7 +213,12 @@ public final class LceCodec extends ChannelDuplexHandler {
                     final int maxPlayers = this.stream.readUnsignedByte();
                     this.stream.skipBytes(8 + 8 + 1 + 4);
                     final int difficulty = this.stream.readByte();
-                    this.stream.skipBytes(4 + 1 + 4 + 4 + 1 + 1 + 4 + 2 + 1);
+                    this.stream.skipBytes(4 + 1 + 4 + 4 + 1); // instance, player index, skin, cape, guest
+                    final boolean newSeaLevel = this.stream.readBoolean();
+                    this.stream.readInt(); // privileges
+                    final int xzSize = this.stream.readShort();
+                    final int hellScale = this.stream.readUnsignedByte();
+                    if (this.toJava.edge != null) this.toJava.edge.world(xzSize, hellScale, newSeaLevel, levelType.equalsIgnoreCase("flat"));
                     this.state = State.PLAY;
                     Logger.LOGGER.info("LCE: joined as " + this.userName + " (entity " + entityId + ", game mode " + gameMode + ", dimension " + dimension + ")");
                     toVia(ctx, this.toJava.javaLogin(entityId, levelType, gameMode & 0x7, dimension, difficulty, maxPlayers));
@@ -507,6 +513,10 @@ public final class LceCodec extends ChannelDuplexHandler {
         }
         if (this.state != State.PLAY) {
             return;
+        }
+        if (this.toJava.edge != null && (id == 0x0B || id == 0x0D) && packet.readableBytes() >= 32) {
+            final int r = packet.readerIndex();
+            this.toJava.edge.playerAt(this.toJava.dimension, packet.getDouble(r), packet.getDouble(r + 24), b -> toVia(ctx, b));
         }
         final ByteBuf lce = this.toLce.translate(id, packet);
         if (this.config.debug() && id != 0x0A && id != 0x0B && id != 0x0C && id != 0x0D && id != 0x00) {

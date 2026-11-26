@@ -42,6 +42,8 @@ public final class LceToJava {
     Locator locator;
     /** Skins of LCE players (see LceSkins), null when off. */
     PlayerSkins skins;
+    /** World border and the sea outside the world, null when off. */
+    WorldEdge edge;
     /** Our user name (for our own player list entry). */
     String selfName;
     /** Run before / after the translated packets went to ViaLegacy. */
@@ -208,6 +210,7 @@ public final class LceToJava {
                 this.dimension = dim;
                 this.loadedChunks.clear();
                 this.waitForTerrain = true;
+                if (this.edge != null) this.edge.respawn();
                 if (this.heldPosition != null) {
                     this.heldPosition.release(); // a position in the old world
                     this.heldPosition = null;
