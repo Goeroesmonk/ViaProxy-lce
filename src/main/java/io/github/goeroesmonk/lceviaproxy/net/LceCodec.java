@@ -629,6 +629,20 @@ public final class LceCodec extends ChannelDuplexHandler {
     private boolean quitPending;
     private static final long GOODBYE_DELAY_MS = 300;
 
+    /** Sends the held back disconnect (once); closes with {@code promise} afterwards when given. */
+    private boolean sendQuit(final ChannelHandlerContext ctx, final ChannelPromise promise) {
+        if (!this.quitPending || !ctx.channel().isActive()) return false;
+        this.quitPending = false;
+        final ByteBuf quit = ctx.alloc().buffer(9);
+        quit.writeInt(5).writeByte(0xFF).writeInt(1); // disconnect: quitting
+        if (promise != null) {
+            ctx.writeAndFlush(quit).addListener(g -> ctx.close(promise));
+        } else {
+            ctx.writeAndFlush(quit);
+        }
+        return true;
+    }
+
     /** The goodbye chat message (config goodbye-message), once, while playing. */
     private void writeGoodbye(final ChannelHandlerContext ctx, final ByteBuf out) {
         if (this.goodbyeSent || this.state != State.PLAY || !this.config.goodbyeMessage()) return;
@@ -660,14 +674,7 @@ public final class LceCodec extends ChannelDuplexHandler {
         if (ctx.channel().isActive()) {
             final long delay = this.goodbyeSent ? GOODBYE_DELAY_MS : 0;
             ctx.writeAndFlush(io.netty.buffer.Unpooled.EMPTY_BUFFER).addListener(f -> ctx.executor().schedule(() -> {
-                if (this.quitPending && ctx.channel().isActive()) {
-                    this.quitPending = false;
-                    final ByteBuf quit = ctx.alloc().buffer(9);
-                    quit.writeInt(5).writeByte(0xFF).writeInt(1); // disconnect: quitting
-                    ctx.writeAndFlush(quit).addListener(g -> ctx.close(promise));
-                } else {
-                    ctx.close(promise);
-                }
+                if (!sendQuit(ctx, promise)) ctx.close(promise);
             }, delay, TimeUnit.MILLISECONDS));
             return;
         }
@@ -730,7 +737,10 @@ public final class LceCodec extends ChannelDuplexHandler {
         if (id == 0xFF && !this.goodbyeSent) {
             writeGoodbye(ctx, out); // leaving: the goodbye message goes first...
             if (out.isReadable()) {
-                this.quitPending = true; // ...and the disconnect a moment later (see close), so the server shows it
+                // ...and the disconnect a moment later, so the server shows the message first. ViaProxy waits for the
+                // server to close the connection after the disconnect, so send it ourselves.
+                this.quitPending = true;
+                ctx.executor().schedule(() -> sendQuit(ctx, null), GOODBYE_DELAY_MS, TimeUnit.MILLISECONDS);
                 return;
             }
         }
