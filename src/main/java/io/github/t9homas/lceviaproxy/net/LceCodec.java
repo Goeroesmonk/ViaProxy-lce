@@ -39,6 +39,17 @@ public final class LceCodec extends ChannelDuplexHandler {
     private LceToJava toJava;
     private JavaToLce toLce;
 
+    // skin sent to the server (Java -> LCE)
+    private JavaSkin.Skin skin;
+    private boolean loginHadSkin;
+    private boolean skinAnnounced;
+
+    // the last server packets, for the log when the stream gets out of sync
+    private static final int HISTORY = 8;
+    private final int[] historyIds = new int[HISTORY];
+    private final byte[][] historyBytes = new byte[HISTORY][];
+    private int historyPos;
+
     public LceCodec(final LceConfig config) {
         this.config = config;
     }
@@ -110,15 +121,17 @@ public final class LceCodec extends ChannelDuplexHandler {
 
             while (this.stream.isReadable() && this.state != State.CLOSED) {
                 this.stream.markReaderIndex();
+                final int start = this.stream.readerIndex();
                 final int id = this.stream.readUnsignedByte();
                 try {
                     if (!handleServerPacket(ctx, id)) {
-                        throw new IllegalStateException("Unknown LCE packet id " + id + " (0x" + Integer.toHexString(id) + ")");
+                        throw new IllegalStateException("Unknown LCE packet id " + id + " (0x" + Integer.toHexString(id) + ")" + history());
                     }
                 } catch (IndexOutOfBoundsException incomplete) {
                     this.stream.resetReaderIndex();
                     break;
                 }
+                if (this.stream != null) remember(id, start);
             }
             if (this.stream != null) this.stream.discardSomeReadBytes();
         } catch (Throwable t) {
@@ -127,10 +140,35 @@ public final class LceCodec extends ChannelDuplexHandler {
         }
     }
 
+    private void remember(final int id, final int start) {
+        final int len = Math.min(this.stream.readerIndex() - start, 96);
+        final byte[] b = new byte[Math.max(len, 0)];
+        this.stream.getBytes(start, b);
+        this.historyIds[this.historyPos] = id;
+        this.historyBytes[this.historyPos] = b;
+        this.historyPos = (this.historyPos + 1) % HISTORY;
+    }
+
+    private String history() {
+        final StringBuilder sb = new StringBuilder("\nLast packets before it (oldest first, max 96 bytes each):");
+        for (int i = 0; i < HISTORY; i++) {
+            final int k = (this.historyPos + i) % HISTORY;
+            if (this.historyBytes[k] == null) continue;
+            sb.append("\n  0x").append(Integer.toHexString(this.historyIds[k])).append(": ").append(ByteBufUtil.hexDump(this.historyBytes[k]));
+        }
+        final int r = this.stream.readerIndex() - 1;
+        final int n = Math.min(this.stream.writerIndex() - r, 96);
+        sb.append("\n  unknown: ").append(ByteBufUtil.hexDump(this.stream, r, Math.max(n, 0)));
+        return sb.toString();
+    }
+
     /**
      * @return false for unknown packet ids
      */
     private boolean handleServerPacket(final ChannelHandlerContext ctx, final int id) throws Exception {
+        if ((id == 0x9A || id == 0xA0) && this.state != State.PING) {
+            return handleTextureRequest(ctx, id);
+        }
         switch (this.state) {
             case PLAY -> {
                 return this.toJava.translate(id, this.stream, b -> toVia(ctx, b));
@@ -167,6 +205,7 @@ public final class LceCodec extends ChannelDuplexHandler {
                     this.state = State.PLAY;
                     Logger.LOGGER.info("LCE: joined as " + this.userName + " (entity " + entityId + ", game mode " + gameMode + ", dimension " + dimension + ")");
                     toVia(ctx, this.toJava.javaLogin(entityId, levelType, gameMode & 0x7, dimension, difficulty, maxPlayers));
+                    if (this.skin != null && !this.loginHadSkin) announceSkin(ctx);
                     return true;
                 }
                 return handleLoginPhase(ctx, id);
@@ -230,7 +269,8 @@ public final class LceCodec extends ChannelDuplexHandler {
         b.writeByte(1);             // difficulty
         b.writeInt(0);              // multiplayer instance id
         b.writeByte(0);             // player index
-        b.writeInt(0);              // skin
+        b.writeInt(this.skin != null ? this.skin.skinId() : 0); // skin
+        this.loginHadSkin = this.skin != null;
         b.writeInt(0);              // cape
         b.writeBoolean(false);      // guest
         b.writeBoolean(false);      // new sea level
@@ -239,6 +279,72 @@ public final class LceCodec extends ChannelDuplexHandler {
         b.writeByte(8);             // hell scale
         toServer(ctx, b);
         this.state = State.LOGIN;
+    }
+
+    // ------------------------------------------------------------------ skin
+
+    private void onSkin(final ChannelHandlerContext ctx, final JavaSkin.Skin skin) {
+        if (skin == null || this.state == State.CLOSED || !ctx.channel().isActive()) return;
+        this.skin = skin;
+        Logger.LOGGER.info("LCE: sending your skin to the server as " + skin.path() + " (" + skin.png().length + " bytes)");
+        if (this.state == State.PLAY) announceSkin(ctx);
+        // HANDSHAKE / PRE_LOGIN: the login packet carries it; LOGIN: announced when the login finishes
+    }
+
+    /**
+     * TextureChange: tells the server (and through it everybody) our skin; the server then asks for the image.
+     */
+    private void announceSkin(final ChannelHandlerContext ctx) {
+        if (this.skinAnnounced) return;
+        this.skinAnnounced = true;
+        final ByteBuf b = ctx.alloc().buffer();
+        b.writeByte(0x9D);
+        b.writeInt(this.toJava.serverEntityId);
+        b.writeByte(0); // e_TextureChange_Skin
+        Types.writeJavaUtf(b, this.skin.path());
+        toServer(ctx, b);
+    }
+
+    /**
+     * Texture (0x9A) / TextureAndGeometry (0xA0). With no data it is a request: answer it when it asks for our skin.
+     * Images of other players are dropped (Java clients can't use them).
+     */
+    private boolean handleTextureRequest(final ChannelHandlerContext ctx, final int id) {
+        final String name = Types.readJavaUtf(this.stream);
+        if (id == 0x9A) {
+            final int n = this.stream.readShort();
+            if (n > 0) this.stream.skipBytes(n);
+            if (n == 0) answerTexture(ctx, id, name);
+        } else {
+            this.stream.readInt(); // skin id
+            final int n = this.stream.readShort();
+            if (n > 0) this.stream.skipBytes(n);
+            this.stream.readInt(); // anim override
+            final int boxes = this.stream.readShort();
+            if (boxes > 0) this.stream.skipBytes(boxes * (2 + 8 * 4));
+            if (n == 0) answerTexture(ctx, id, name);
+        }
+        return true;
+    }
+
+    private void answerTexture(final ChannelHandlerContext ctx, final int id, final String name) {
+        if (this.skin == null || !name.equals(this.skin.path())) {
+            if (this.config.debug()) Logger.LOGGER.info("[LCE] server asked for unknown texture " + name);
+            return;
+        }
+        if (this.config.debug()) Logger.LOGGER.info("[LCE] server asked for our skin " + name + ", sending it");
+        final byte[] png = this.skin.png();
+        final ByteBuf b = ctx.alloc().buffer(png.length + 32);
+        b.writeByte(id);
+        Types.writeJavaUtf(b, name);
+        if (id == 0xA0) b.writeInt(this.skin.skinId());
+        b.writeShort(png.length);
+        b.writeBytes(png);
+        if (id == 0xA0) {
+            b.writeInt(0);   // anim override
+            b.writeShort(0); // no extra boxes
+        }
+        toServer(ctx, b);
     }
 
     private void sendPreLogin(final ChannelHandlerContext ctx, final String name) {
@@ -376,6 +482,8 @@ public final class LceCodec extends ChannelDuplexHandler {
                 packet.readUnsignedByte(); // protocol
                 this.userName = Types.readString(packet);
                 this.state = State.PRE_LOGIN;
+                JavaSkin.load(this.config.skin(), this.userName)
+                        .thenAccept(s -> ctx.channel().eventLoop().execute(() -> onSkin(ctx, s)));
                 ctx.channel().eventLoop().execute(() -> sendPreLogin(ctx, this.userName));
             } else if (id == 0xFE) {
                 this.state = State.PING;

@@ -51,6 +51,18 @@ public final class Types {
         in.skipBytes(in.readUnsignedShort());
     }
 
+    /** DataInput.readUTF style string (u16 byte length + UTF-8), used for texture names. */
+    public static String readJavaUtf(final ByteBuf in) {
+        final int len = in.readUnsignedShort();
+        return in.readCharSequence(len, java.nio.charset.StandardCharsets.UTF_8).toString();
+    }
+
+    public static void writeJavaUtf(final ByteBuf out, final String s) {
+        final byte[] b = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        out.writeShort(b.length);
+        out.writeBytes(b);
+    }
+
     // ------------------------------------------------------------------ var ints (ViaProxy side framing)
 
     public static int readVarInt(final ByteBuf in) {

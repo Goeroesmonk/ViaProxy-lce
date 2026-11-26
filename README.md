@@ -25,6 +25,7 @@ Like the LCE client, the plugin follows the server's `_minecraft._tcp` SRV recor
 | `netcode-version` | `560` | LCE network version sent at login (Revelations). Change it if the server says your client is outdated. |
 | `xuid` | `auto` | Your player id. `auto` makes a stable id from your user name. To appear as the same player as your LCE client, copy the value from its `uid.dat`, e.g. `0xD8A081207D94B205`. |
 | `srv-lookup` | `true` | Follow SRV records when no port is given. |
+| `skin` | `auto` | The skin LCE players see on you. `auto` = the Java skin of your user name (looked up at Mojang), another player's name, a path to a 64x64 / 64x32 PNG, or `none`. It is converted to the 64x32 format LCE uses (the second layer is painted onto the first, slim arms are widened). |
 | `debug` | `false` | Log dropped / unknown packets and every packet sent to ViaLegacy. |
 
 Your user name is the one you use in your Java client (with `proxy-online-mode` off, any name works).
@@ -59,7 +60,7 @@ ViaLegacy / ViaVersion translate those to your client's version.
   keep alive). Live play on a real server still needs more testing.
 - Revelations' optional encryption (`MC|CKey` / `MC|CAck` / `MC|COn`) and identity tokens (`MC|CTChallenge`) are **not
   supported** yet. Servers that require them will not work.
-- Skins, capes and other LCE-only features are not shown.
+- Your skin is sent to the server, so LCE players see it. Skins of LCE players are not shown in the Java client yet (Steve / Alex), capes and other LCE-only features neither.
 - Entities with ids above 2047 are not expected (LCE packs them into 11 bits).
 - broken:
   - minecarts

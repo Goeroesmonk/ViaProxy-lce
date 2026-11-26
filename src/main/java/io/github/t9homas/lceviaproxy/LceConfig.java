@@ -23,6 +23,8 @@ public final class LceConfig {
              xuid: your player id. "auto" makes a stable one from your user name.
                    To use the same id as your LCE client, copy the value from its uid.dat (for example 0xD8A081207D94B205).
              srv-lookup: follow _minecraft._tcp SRV records when no port is given (LCE clients do this too).
+             skin: the skin LCE players see on you. "auto" = the Java skin of your user name (from Mojang),
+                   another player's name, a path to a 64x64 / 64x32 PNG file, or "none" (server picks a default skin).
              debug: log unknown / dropped packets.
             """;
 
@@ -30,6 +32,7 @@ public final class LceConfig {
     private final String xuid;
     private final boolean srvLookup;
     private final boolean debug;
+    private final String skin;
 
     public LceConfig(final File dataFolder) {
         final Properties p = new Properties();
@@ -37,6 +40,7 @@ public final class LceConfig {
         p.setProperty("xuid", "auto");
         p.setProperty("srv-lookup", "true");
         p.setProperty("debug", "false");
+        p.setProperty("skin", "auto");
 
         final File file = new File(dataFolder, "config.properties");
         if (file.isFile()) {
@@ -57,6 +61,7 @@ public final class LceConfig {
         this.xuid = p.getProperty("xuid", "auto").trim();
         this.srvLookup = Boolean.parseBoolean(p.getProperty("srv-lookup", "true").trim());
         this.debug = Boolean.parseBoolean(p.getProperty("debug", "false").trim());
+        this.skin = p.getProperty("skin", "auto").trim();
     }
 
     private static int parseInt(final String s, final int def) {
@@ -73,6 +78,10 @@ public final class LceConfig {
 
     public boolean srvLookup() {
         return this.srvLookup;
+    }
+
+    public String skin() {
+        return this.skin;
     }
 
     public boolean debug() {
