@@ -143,6 +143,9 @@ public final class LceToJava {
             this.after.clear();
             throw e;
         }
+        if (this.heldPosition != null && System.currentTimeMillis() - this.heldSince > HOLD_POSITION_MS) {
+            releasePosition(list); // the chunks did not all come (world border, slow server): spawn anyway
+        }
         Runnable r;
         while ((r = this.before.poll()) != null) r.run();
         for (ByteBuf b : list) out.accept(b);
@@ -201,6 +204,12 @@ public final class LceToJava {
                 in.readShort(); // xz size
                 in.readUnsignedByte(); // hell scale
                 this.dimension = dim;
+                this.loadedChunks.clear();
+                this.waitForTerrain = true;
+                if (this.heldPosition != null) {
+                    this.heldPosition.release(); // a position in the old world
+                    this.heldPosition = null;
+                }
                 this.rotations.clear();
                 this.spawned.clear();
                 this.bats.clear();
@@ -223,7 +232,25 @@ public final class LceToJava {
             case 0x0A -> copy(in, out, id, "b");
             case 0x0B -> copy(in, out, id, "ddddb");
             case 0x0C -> copy(in, out, id, "ffb");
-            case 0x0D -> copy(in, out, id, "ddddffb");
+            case 0x0D -> {
+                final List<ByteBuf> one = new ArrayList<>(1);
+                copy(in, one, id, "ddddffb");
+                final ByteBuf b = one.get(0);
+                if (this.waitForTerrain || this.heldPosition != null) {
+                    this.waitForTerrain = false;
+                    if (this.heldPosition != null) this.heldPosition.release();
+                    this.heldPosition = null;
+                    this.heldCx = (int) Math.floor(b.getDouble(1)) >> 4;
+                    this.heldCz = (int) Math.floor(b.getDouble(1 + 24)) >> 4;
+                    if (!terrainAround(this.heldCx, this.heldCz)) {
+                        // hold the spawn position: the client stays on the loading screen until the chunks around it are there
+                        this.heldPosition = b;
+                        this.heldSince = System.currentTimeMillis();
+                        break;
+                    }
+                }
+                out.add(b);
+            }
             case 0x10 -> copy(in, out, id, "s");
             case 0x11 -> copy(in, out, id, "ebibi");
             case 0x12 -> copy(in, out, id, "eb");
@@ -479,7 +506,10 @@ public final class LceToJava {
             case 0x32 -> { // chunk visibility
                 final int cx = in.readInt(), cz = in.readInt();
                 final boolean visible = in.readUnsignedByte() != 0;
-                if (!visible) out.add(ChunkConverter.unloadChunk(this.alloc, cx, cz));
+                if (!visible) {
+                    out.add(ChunkConverter.unloadChunk(this.alloc, cx, cz));
+                    this.loadedChunks.remove(chunkKey(cx, cz));
+                }
             }
             case 0x33 -> blockRegion(in, out);
             case 0x34 -> { // chunk tiles update
@@ -909,6 +939,37 @@ public final class LceToJava {
 
     // ------------------------------------------------------------------ chunks
 
+    /**
+     * LCE sends the spawn position when only the player's own chunk is there and the chunks around it about 2 seconds
+     * later. Java clients leave the loading screen at the position, so for that time you looked out of the bottom of a
+     * lonely chunk. The first position after login / respawn is held until the 3x3 chunks around it are loaded.
+     */
+    private static final long HOLD_POSITION_MS = 4000;
+    private final java.util.Set<Long> loadedChunks = new java.util.HashSet<>();
+    private boolean waitForTerrain = true;
+    private ByteBuf heldPosition;
+    private long heldSince;
+    private int heldCx, heldCz;
+
+    private static long chunkKey(final int cx, final int cz) {
+        return ((long) cx << 32) | (cz & 0xFFFFFFFFL);
+    }
+
+    private boolean terrainAround(final int cx, final int cz) {
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                if (!this.loadedChunks.contains(chunkKey(cx + dx, cz + dz))) return false;
+            }
+        }
+        return true;
+    }
+
+    private void releasePosition(final List<ByteBuf> out) {
+        if (this.debug) debugLog("Spawn position released after " + (System.currentTimeMillis() - this.heldSince) + " ms");
+        out.add(this.heldPosition);
+        this.heldPosition = null;
+    }
+
     private void blockRegion(final ByteBuf in, final List<ByteBuf> out) throws Exception {
         final int flags = in.readUnsignedByte();
         final int x = in.readInt();
@@ -933,6 +994,8 @@ public final class LceToJava {
         final byte[] data = size == 0 ? new byte[0] : ChunkConverter.decompress(compressed);
         if (full) {
             out.add(ChunkConverter.fullChunk(this.alloc, x >> 4, z >> 4, ys, data, this.dimension == 0));
+            this.loadedChunks.add(chunkKey(x >> 4, z >> 4));
+            if (this.heldPosition != null && terrainAround(this.heldCx, this.heldCz)) releasePosition(out);
         } else {
             ChunkConverter.partialRegion(this.alloc, x, y, z, xs, ys, zs, data, out::add);
         }
