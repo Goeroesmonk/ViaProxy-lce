@@ -1065,6 +1065,11 @@ public final class LceToJava {
                         p += 2 + mods * (4 + 8 + 1);
                     }
                 }
+                case 0x03 -> { // chat
+                    final int len = chatLength(in, at);
+                    if (len <= 0) return -1;
+                    p = at + len;
+                }
                 case 0x17 -> { // object spawn
                     p += 2 + 1 + 12 + 2;
                     final int data = in.getInt(p);
@@ -1094,6 +1099,23 @@ public final class LceToJava {
         } catch (IndexOutOfBoundsException e) {
             return -1;
         }
+    }
+
+    /** Length of an LCE chat packet at {@code at}: -1 if not plausible, -2 if not all there. */
+    private static int chatLength(final ByteBuf in, final int at) {
+        final int end = in.writerIndex();
+        if (at + 5 > end) return -2;
+        final int type = in.getShort(at + 1), counts = in.getShort(at + 3);
+        if (type < 0 || type > 100 || (counts & 0xFF00) != 0 || ((counts >> 4) & 0xF) > 4 || (counts & 0xF) > 4) return -1;
+        int p = at + 5;
+        for (int i = 0; i < ((counts >> 4) & 0xF); i++) {
+            if (p + 2 > end) return -2;
+            final int n = in.getShort(p);
+            if (n < 0 || n > 1024) return -1;
+            p += 2 + n * 2;
+        }
+        p += (counts & 0xF) * 4;
+        return p > end ? -2 : p - at;
     }
 
     private static int skipMetadata(final ByteBuf in, int p) {
@@ -1203,6 +1225,11 @@ public final class LceToJava {
                 if (at + 10 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
                 final int cx = in.getInt(at + 1), cz = in.getInt(at + 5), v = in.getUnsignedByte(at + 9);
                 return Math.abs(cx) < 2048 && Math.abs(cz) < 2048 && v <= 1 ? 1 : -3;
+            }
+            case 0x03 -> { // chat: message type, string / int counts, strings of a sensible length
+                final int len = chatLength(in, at);
+                if (len == -2) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
+                return len > 0 ? 2 : -3;
             }
             case 0x04 -> { // time: world age and day time, both small positive numbers
                 if (at + 17 > end) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
