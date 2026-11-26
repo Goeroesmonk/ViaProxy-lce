@@ -215,11 +215,12 @@ public final class LceCodec extends ChannelDuplexHandler {
                     final int difficulty = this.stream.readByte();
                     this.stream.skipBytes(4 + 1 + 4 + 4 + 1); // instance, player index, skin, cape, guest
                     final boolean newSeaLevel = this.stream.readBoolean();
-                    this.stream.readInt(); // privileges
+                    final int privileges = this.stream.readInt();
                     final int xzSize = this.stream.readShort();
                     final int hellScale = this.stream.readUnsignedByte();
                     if (this.toJava.edge != null) this.toJava.edge.world(xzSize, hellScale, newSeaLevel, levelType.equalsIgnoreCase("flat"));
                     this.state = State.PLAY;
+                    logPrivileges(privileges);
                     Logger.LOGGER.info("LCE: joined as " + this.userName + " (entity " + entityId + ", game mode " + gameMode + ", dimension " + dimension + ")");
                     toVia(ctx, this.toJava.javaLogin(entityId, levelType, gameMode & 0x7, dimension, difficulty, maxPlayers));
                     this.toJava.selfName = this.userName;
@@ -298,6 +299,21 @@ public final class LceCodec extends ChannelDuplexHandler {
         b.writeByte(8);             // hell scale
         toServer(ctx, b);
         this.state = State.LOGIN;
+    }
+
+    /**
+     * The host's per player privileges (Player::EPlayerGamePrivileges). They only apply when the host turned "Trust
+     * Players" off, and belong to the XUID: with xuid=auto the server sees a new player.
+     */
+    private void logPrivileges(final int p) {
+        final StringBuilder no = new StringBuilder();
+        if ((p & 1) != 0) no.append(" mine,");
+        if ((p & (1 << 1)) != 0) no.append(" build,");
+        if ((p & (1 << 11)) == 0) no.append(" use doors / switches,");
+        if ((p & (1 << 12)) == 0) no.append(" use containers,");
+        Logger.LOGGER.info("LCE: privileges 0x" + Integer.toHexString(p) + (no.length() == 0 ? ""
+                : " - if the host has \"Trust Players\" off you can't" + no.substring(0, no.length() - 1)
+                + " (the host can change this; privileges belong to your xuid, see the config)"));
     }
 
     // ------------------------------------------------------------------ skin
