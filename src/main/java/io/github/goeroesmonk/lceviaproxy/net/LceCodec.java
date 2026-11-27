@@ -70,8 +70,9 @@ public final class LceCodec extends ChannelDuplexHandler {
         if (this.config.locatorBar()) this.toJava.locator = new Locator(ctx.channel(), this.config.debug());
         if (this.config.lceSkins()) this.toJava.skins = new PlayerSkins(ctx.channel(), this.config.debug());
         if (this.config.worldBorder()) this.toJava.edge = new WorldEdge(ctx.channel(), ctx.alloc(), this.config.debug());
-        if (this.config.joinLeaveMessages() && io.github.goeroesmonk.lceviaproxy.LcePlugin.messages() != null) {
-            this.toJava.presence = new Presence(io.github.goeroesmonk.lceviaproxy.LcePlugin.messages());
+        if (this.config.joinLeaveMessages() || this.toJava.skins != null) {
+            this.toJava.presence = new Presence(this.config.joinLeaveMessages() ? io.github.goeroesmonk.lceviaproxy.LcePlugin.messages() : null,
+                    this.toJava.skins);
         }
         this.toLce = new JavaToLce(ctx.alloc(), this.toJava);
     }
@@ -150,6 +151,14 @@ public final class LceCodec extends ChannelDuplexHandler {
                     }
                 } catch (IndexOutOfBoundsException incomplete) {
                     this.stream.resetReaderIndex();
+                    if (incomplete instanceof LceToJava.VelocityWait && !this.retryScheduled) {
+                        // the server may send nothing more for a while: decide after the wait anyway
+                        this.retryScheduled = true;
+                        ctx.executor().schedule(() -> {
+                            this.retryScheduled = false;
+                            process(ctx);
+                        }, LceToJava.velocityWaitMs() + 5, TimeUnit.MILLISECONDS);
+                    }
                     if (this.config.debug() && this.stream.readableBytes() > 256 * 1024) {
                         Logger.LOGGER.info("[LCE] still waiting for packet 0x" + Integer.toHexString(id) + " with " + this.stream.readableBytes() + " bytes buffered: " + incomplete);
                     }
@@ -369,6 +378,7 @@ public final class LceCodec extends ChannelDuplexHandler {
     }
 
     private static final long SKIN_WAIT_MS = 2000;
+    private boolean retryScheduled;
     private boolean skinDone;
     /** Our signed Mojang textures (value, signature) for our own player list entry, or null. */
     private String[] selfTexture;

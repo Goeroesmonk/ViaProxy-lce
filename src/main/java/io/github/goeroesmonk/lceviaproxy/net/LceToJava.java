@@ -1004,9 +1004,38 @@ public final class LceToJava {
      * the id overlaps the flag and 3 shorts follow. Decide by which entity exists, else by which reading lands on a
      * valid next packet.
      */
+    /** Thrown to wait for more data; LceCodec tries again after VELOCITY_WAIT_MS even if the server sends nothing. */
+    public static final class VelocityWait extends IndexOutOfBoundsException {
+        VelocityWait() {
+            super("velocity: waiting for more packets");
+        }
+
+        @Override
+        public synchronized Throwable fillInStackTrace() {
+            return this;
+        }
+    }
+
+    public static long velocityWaitMs() {
+        return VELOCITY_WAIT_MS;
+    }
+
+    private boolean waitedLongEnough(final int r) {
+        final long now = System.currentTimeMillis();
+        if (this.velocityWaitAt != r) {
+            this.velocityWaitAt = r;
+            this.velocityWaitSince = now;
+        }
+        return now - this.velocityWaitSince >= VELOCITY_WAIT_MS;
+    }
+
     private boolean isBrokenVelocity(final int idAndFlag, final ByteBuf in) {
-        if (in.readableBytes() < 7) throw new IndexOutOfBoundsException("velocity: waiting for the next packet");
         final int r = in.readerIndex();
+        if (in.readableBytes() < 7) {
+            // nothing after it yet: wait a little, then take the small form (the shorts would not fit either)
+            if (in.readableBytes() < 3 || !waitedLongEnough(r)) throw new VelocityWait();
+            return false;
+        }
         final boolean smallFits = SERVER_PACKETS.get(in.getUnsignedByte(r + 3));
         final boolean shortsFit = SERVER_PACKETS.get(in.getUnsignedByte(r + 6));
         if (smallFits != shortsFit) return shortsFit;
@@ -1033,12 +1062,7 @@ public final class LceToJava {
         if (in.writerIndex() < limit && Math.abs(small - shorts) < 3) {
             // not all of the window is there and it is not clear yet: wait for more data, but not long (everything
             // after this packet waits too)
-            final long now = System.currentTimeMillis();
-            if (this.velocityWaitAt != r) {
-                this.velocityWaitAt = r;
-                this.velocityWaitSince = now;
-            }
-            if (now - this.velocityWaitSince < VELOCITY_WAIT_MS) throw new IndexOutOfBoundsException("velocity: waiting for more packets");
+            if (!waitedLongEnough(r)) throw new VelocityWait();
         }
         this.velocityWaitAt = -1;
         if (this.debug && shorts > small) {

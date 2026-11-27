@@ -25,7 +25,8 @@ import java.util.concurrent.TimeUnit;
  *     to create the player), right after it (1.8 - 1.19.2 keep the last entry) and after ViaLegacy removed its entry</li>
  *     <li>other players: sent after ViaLegacy removed its entry, with the profile ViaLegacy used</li>
  * </ul>
- * The entry is removed again when the player despawns.
+ * The entry is removed again when the player despawns, unless {@link Presence} still lists the player (the tab list
+ * shows every player on the server, not only the ones near us).
  */
 final class PlayerSkins {
 
@@ -38,6 +39,8 @@ final class PlayerSkins {
     private final boolean debug;
     /** server entity id -> player with an entry from us */
     private final Map<Integer, Entry> shown = new HashMap<>();
+    /** small id -> every player on the server (from Presence) */
+    private final Map<Integer, Entry> listed = new HashMap<>();
 
     PlayerSkins(final Channel channel, final boolean debug) {
         this.channel = channel;
@@ -121,12 +124,34 @@ final class PlayerSkins {
 
     void remove(final int eid) {
         final Entry e = this.shown.remove(eid);
-        if (e != null && !this.shown.containsValue(e)) send(e, false);
+        if (e != null && !this.shown.containsValue(e) && !this.listed.containsValue(e)) send(e, false);
     }
 
     void clear() {
-        for (Entry e : this.shown.values()) send(e, false);
+        for (Entry e : this.shown.values()) if (!this.listed.containsValue(e)) send(e, false);
         this.shown.clear();
+    }
+
+    /** A player on the server (name null: not near us yet, shown as "Player N" like on LCE). */
+    void listed(final int smallId, final String name) {
+        final Entry e = name != null ? new Entry(name, LceSkins.javaUuid(name))
+                : new Entry("Player " + smallId, UUID.nameUUIDFromBytes(("LCE player " + smallId).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        final Entry old = this.listed.put(smallId, e);
+        if (e.equals(old)) return;
+        this.channel.eventLoop().execute(() -> { // not in the middle of translating a packet
+            if (!this.channel.isActive()) return;
+            if (old != null && !this.shown.containsValue(old) && !this.listed.containsValue(old)) send(old, false);
+            if (e.equals(this.listed.get(smallId)) && !this.shown.containsValue(e)) send(e, true);
+        });
+    }
+
+    /** The player left the server. */
+    void unlisted(final int smallId) {
+        final Entry old = this.listed.remove(smallId);
+        if (old == null) return;
+        this.channel.eventLoop().execute(() -> {
+            if (this.channel.isActive() && !this.shown.containsValue(old) && !this.listed.containsValue(old)) send(old, false);
+        });
     }
 
     private void send(final Entry e, final boolean add) {
